@@ -13,10 +13,11 @@ from telegram.ext import (
 # Импорт загрузчика переменных окружения
 from dotenv import load_dotenv
 
-# Импорт SDK и необходимых протобаф-сообщений для работы с Yandex GPT
-from yandex.cloud import SDK
+# Обновлённый импорт для работы с Yandex GPT
+from yandex.cloud.auth import Authenticator
 from yandex.cloud.ai.llm.v1.text_generation_service_pb2 import TextGenerationRequest
 from yandex.cloud.ai.llm.v1.text_generation_service_pb2_grpc import TextGenerationServiceStub
+import grpc
 
 # Загружаем переменные окружения из .env
 load_dotenv()
@@ -26,9 +27,10 @@ YANDEX_IAM_TOKEN = os.getenv("YANDEX_IAM_TOKEN")
 if not YANDEX_IAM_TOKEN:
     raise ValueError("Ошибка: Не настроен YANDEX_IAM_TOKEN. Проверьте .env файл.")
 
-# Инициализируем SDK и создаём клиента для Yandex GPT
-sdk = SDK(iam_token=YANDEX_IAM_TOKEN)
-gpt_client = sdk.client(TextGenerationServiceStub)
+# Инициализация клиента Yandex GPT через актуальный метод
+authenticator = Authenticator(iam_token=YANDEX_IAM_TOKEN)
+channel = grpc.secure_channel('llm.api.cloud.yandex.net:443', authenticator)
+gpt_client = TextGenerationServiceStub(channel)
 
 # Определяем DATA_DIR: берем из переменной окружения или ставим значение по умолчанию
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
@@ -135,22 +137,18 @@ def build_prompt_for_chat(user_message: str, test_answers: dict) -> str:
 # ----------------------- Функция вызова Yandex GPT -----------------------
 
 async def call_yandex_gpt(prompt: str) -> str:
-    """Функция отправки запроса в Yandex GPT через SDK с использованием актуальных методов"""
+    """Функция отправки запроса в Yandex GPT"""
     try:
         logger.info(f"Отправка запроса в Yandex GPT:\n{prompt}")
-        # Создаём запрос к сервису текстовой генерации
         request = TextGenerationRequest(
             model="yandex-gpt",
             prompt=prompt,
             max_tokens=200
         )
-        # Выполняем вызов синхронно в отдельном потоке
-        response = await asyncio.to_thread(gpt_client.GenerateText, request)
+        # Синхронный вызов метода генерации текста
+        response = gpt_client.GenerateText(request)
         logger.info(f"Ответ от Yandex GPT: {response}")
-        if response and response.text:
-            return response.text
-        else:
-            return "Ошибка: пустой ответ от Yandex GPT"
+        return response.text if response.text else "Ошибка: пустой ответ от Yandex GPT"
     except Exception as e:
         logger.error(f"Ошибка вызова Yandex GPT: {e}")
         return f"Ошибка вызова Yandex GPT: {e}"
