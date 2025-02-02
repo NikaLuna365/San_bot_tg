@@ -17,17 +17,22 @@ from yandexcloud import SDK
 # Загружаем переменные из .env
 load_dotenv()
 
-# ----------------------- Настройка логирования -----------------------
+# Получаем API-ключи для Yandex GPT
+YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
+YANDEX_KEY_ID = os.getenv("YANDEX_KEY_ID")
+
+# Проверяем, что переменные загружены корректно
+if not YANDEX_API_KEY or not YANDEX_KEY_ID:
+    raise ValueError("Ошибка: Не настроены API-ключи Yandex GPT. Проверьте .env файл.")
+
+# Настройка логирования
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-# ----------------------- Основные настройки и директории -----------------------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-os.makedirs(DATA_DIR, exist_ok=True)
+logger.info(f"YANDEX_API_KEY загружен: {bool(YANDEX_API_KEY)}")
+logger.info(f"YANDEX_KEY_ID загружен: {bool(YANDEX_KEY_ID)}")
 
 # ----------------------- Состояния для ConversationHandler -----------------------
 # Состояния прохождения теста (6 фиксированных вопросов + 2 открытых)
@@ -54,12 +59,11 @@ OPEN_QUESTIONS = [
     "8. Что больше всего повлияло на ваше состояние сегодня?"
 ]
 
-# ----------------------- Функции формирования промптов для Yandex GPT -----------------------
+# ----------------------- Функции формирования промптов -----------------------
 
-def build_gemini_prompt_for_test(test_answers: dict) -> str:
+def build_prompt_for_test(test_answers: dict) -> str:
     """
     Формирует промпт для анализа теста.
-    (Промпт остаётся прежним, лишь функция вызова теперь использует Yandex GPT.)
     """
     standard = (
         "Вы профессиональный психолог с 10-летним стажем. "
@@ -78,7 +82,7 @@ def build_gemini_prompt_for_test(test_answers: dict) -> str:
     logger.info(f"Промпт для теста:\n{prompt}")
     return prompt
 
-def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
+def build_prompt_for_retro(averages: dict, test_count: int) -> str:
     """
     Формирует промпт для ретроспективного анализа.
     """
@@ -96,10 +100,10 @@ def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
     logger.info(f"Промпт для ретроспективы:\n{prompt}")
     return prompt
 
-def build_gemini_prompt_for_chat(user_message: str, test_answers: dict) -> str:
+def build_prompt_for_chat(user_message: str, test_answers: dict) -> str:
     """
-    Формирует промпт для режима общения с Yandex GPT.
-    Включает стандартное вступление, результаты последнего теста и вопрос клиента.
+    Формирует промпт для общения с Yandex GPT.
+    Включает результаты последнего теста для обеспечения контекста.
     """
     standard = (
         "Вы профессиональный психолог с 10-летним стажем. "
@@ -115,23 +119,22 @@ def build_gemini_prompt_for_chat(user_message: str, test_answers: dict) -> str:
         answer = test_answers.get(key, "не указано")
         prompt += f"{i}. {question}\n   Ответ: {answer}\n"
     prompt += "\nВопрос клиента: " + user_message + "\n"
-    logger.info(f"Промпт для чата с тестовыми результатами:\n{prompt}")
+    logger.info(f"Промпт для чата:\n{prompt}")
     return prompt
 
 # ----------------------- Функция вызова Yandex GPT -----------------------
 
 async def call_yandex_gpt(prompt: str) -> str:
-    """Функция отправки запроса в Yandex GPT"""
+    """Функция отправки запроса в Yandex GPT через официальный SDK"""
     try:
-        sdk = SDK(oauth_token=os.getenv("YANDEX_API_KEY"))
+        logger.info(f"Отправка запроса в Yandex GPT:\n{prompt}")
+        sdk = SDK(oauth_token=YANDEX_API_KEY)
         model = sdk.ai.gpt().completion("yandex.gpt")
         result = model.generate(prompt=prompt)
-        text = result.get("text")
-        if text:
-            logger.info(f"Ответ от Yandex GPT: {text}")
-            return text
+        logger.info(f"Ответ от Yandex GPT: {result}")
+        if result and 'text' in result:
+            return result['text']
         else:
-            logger.error("Ошибка: пустой ответ от Yandex GPT")
             return "Ошибка: пустой ответ от Yandex GPT"
     except Exception as e:
         logger.error(f"Ошибка вызова Yandex GPT: {e}")
@@ -204,7 +207,7 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
     context.user_data["last_test_answers"] = context.user_data.get("test_answers", {})
 
     # Формирование промпта для анализа теста и вызов Yandex GPT
-    prompt = build_gemini_prompt_for_test(context.user_data.get("test_answers", {}))
+    prompt = build_prompt_for_test(context.user_data.get("test_answers", {}))
     response_text = await call_yandex_gpt(prompt)
     await update.message.reply_text(f"Результат анализа:\n{response_text}", reply_markup=ReplyKeyboardRemove())
 
@@ -239,17 +242,15 @@ async def after_test_choice_handler(update: Update, context: CallbackContext) ->
         await update.message.reply_text("Пожалуйста, выберите: 'Главное меню' или 'Пообщаться с Yandex GPT'.")
         return AFTER_TEST_CHOICE
 
-# ----------------------- Режим общения с Yandex GPT -----------------------
-
 async def yandex_chat_handler(update: Update, context: CallbackContext) -> int:
     user_message = update.message.text.strip()
     if user_message.lower() == "главное меню":
         await update.message.reply_text("Возвращаемся в главное меню.", reply_markup=ReplyKeyboardRemove())
         await start(update, context)
         return ConversationHandler.END
-    # Извлекаем результаты последнего теста для включения в контекст
+    # Извлекаем результаты последнего теста для контекста
     test_answers = context.user_data.get("last_test_answers", {})
-    prompt = build_gemini_prompt_for_chat(user_message, test_answers)
+    prompt = build_prompt_for_chat(user_message, test_answers)
     response_text = await call_yandex_gpt(prompt)
     await update.message.reply_text(response_text)
     return YANDEX_CHAT
@@ -345,7 +346,7 @@ async def run_retrospective_now(update: Update, context: CallbackContext):
     else:
         averages["Настроение"] = None
 
-    prompt = build_gemini_prompt_for_retro(averages, len(tests))
+    prompt = build_prompt_for_retro(averages, len(tests))
     response_text = await call_yandex_gpt(prompt)
     await update.message.reply_text(f"Ретроспектива за последнюю неделю:\n{response_text}")
 
@@ -409,7 +410,7 @@ def main() -> None:
 
     app = Application.builder().token(TOKEN).build()
 
-    # ConversationHandler для теста с последующим выбором действий и режимом общения с Yandex GPT
+    # ConversationHandler для теста и общения с Yandex GPT
     test_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Тест$"), test_start)],
         states={
