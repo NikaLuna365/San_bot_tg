@@ -21,9 +21,13 @@ load_dotenv()
 YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_KEY_ID = os.getenv("YANDEX_KEY_ID")
 
-# Проверяем, что переменные загружены корректно
 if not YANDEX_API_KEY or not YANDEX_KEY_ID:
     raise ValueError("Ошибка: Не настроены API-ключи Yandex GPT. Проверьте .env файл.")
+
+# Определяем DATA_DIR: берем из переменной окружения или ставим значение по умолчанию
+DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR)
 
 # Настройка логирования
 logging.basicConfig(
@@ -33,6 +37,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.info(f"YANDEX_API_KEY загружен: {bool(YANDEX_API_KEY)}")
 logger.info(f"YANDEX_KEY_ID загружен: {bool(YANDEX_KEY_ID)}")
+logger.info(f"DATA_DIR установлен: {DATA_DIR}")
 
 # ----------------------- Состояния для ConversationHandler -----------------------
 # Состояния прохождения теста (6 фиксированных вопросов + 2 открытых)
