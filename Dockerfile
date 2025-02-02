@@ -1,6 +1,6 @@
 FROM python:3.10-slim
 
-# Отключаем запись байткода и включаем небуферизированный вывод
+# Отключаем запись .pyc и включаем небуферизированный вывод
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
