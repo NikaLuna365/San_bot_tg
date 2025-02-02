@@ -10,29 +10,38 @@ from telegram.ext import (
     filters, CallbackContext
 )
 
-# Импорт загрузчика переменных окружения
 from dotenv import load_dotenv
 
-# Обновлённый импорт для работы с Yandex GPT
+import grpc
 from yandex.cloud.auth import Authenticator
 from yandex.cloud.ai.llm.v1.text_generation_service_pb2 import TextGenerationRequest
 from yandex.cloud.ai.llm.v1.text_generation_service_pb2_grpc import TextGenerationServiceStub
-import grpc
 
-# Загружаем переменные окружения из .env
+# Загружаем переменные окружения из .env файла
 load_dotenv()
 
-# Получаем IAM-токен для доступа к Yandex GPT
+# Получение учетных данных для Яндекс
 YANDEX_IAM_TOKEN = os.getenv("YANDEX_IAM_TOKEN")
-if not YANDEX_IAM_TOKEN:
-    raise ValueError("Ошибка: Не настроен YANDEX_IAM_TOKEN. Проверьте .env файл.")
+SERVICE_ACCOUNT_KEY_PATH = os.getenv("SERVICE_ACCOUNT_KEY_PATH", None)
+if not YANDEX_IAM_TOKEN and not SERVICE_ACCOUNT_KEY_PATH:
+    raise ValueError("Ошибка: необходимо задать YANDEX_IAM_TOKEN или SERVICE_ACCOUNT_KEY_PATH в переменных окружения.")
 
-# Инициализация клиента Yandex GPT через актуальный метод
-authenticator = Authenticator(iam_token=YANDEX_IAM_TOKEN)
-channel = grpc.secure_channel('llm.api.cloud.yandex.net:443', authenticator)
-gpt_client = TextGenerationServiceStub(channel)
+def create_yandex_gpt_client():
+    """
+    Создает клиента для работы с Yandex GPT с использованием актуальной авторизации.
+    Если задан IAM-токен, используется он, иначе – ключ сервисного аккаунта.
+    """
+    if YANDEX_IAM_TOKEN:
+        authenticator = Authenticator(iam_token=YANDEX_IAM_TOKEN)
+    else:
+        authenticator = Authenticator(service_account_key=SERVICE_ACCOUNT_KEY_PATH)
+    channel = grpc.secure_channel('llm.api.cloud.yandex.net:443', authenticator)
+    return TextGenerationServiceStub(channel)
 
-# Определяем DATA_DIR: берем из переменной окружения или ставим значение по умолчанию
+# Инициализируем клиента Yandex GPT
+gpt_client = create_yandex_gpt_client()
+
+# Каталог для хранения JSON с тестовыми данными
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
@@ -46,18 +55,15 @@ logger = logging.getLogger(__name__)
 logger.info(f"YANDEX_IAM_TOKEN загружен: {bool(YANDEX_IAM_TOKEN)}")
 logger.info(f"DATA_DIR установлен: {DATA_DIR}")
 
-# ----------------------- Состояния для ConversationHandler -----------------------
-# Состояния прохождения теста (6 фиксированных вопросов + 2 открытых)
+# Определение состояний для диалога (ConversationHandler)
 TEST_FIXED_1, TEST_FIXED_2, TEST_FIXED_3, TEST_FIXED_4, TEST_FIXED_5, TEST_FIXED_6, TEST_OPEN_1, TEST_OPEN_2 = range(8)
-# Состояния для ретроспективы
 RETRO_CHOICE, RETRO_SCHEDULE_DAY = range(8, 10)
-# Состояния после теста: выбор дальнейших действий и режим общения с Yandex GPT
 AFTER_TEST_CHOICE, YANDEX_CHAT = range(10, 12)
 
-# Глобальный словарь для запланированных ретроспектив (user_id -> weekday, где 0 – понедельник, …, 6 – воскресенье)
+# Глобальный словарь для запланированных ретроспектив (user_id -> день недели, где 0 – понедельник, ... 6 – воскресенье)
 scheduled_retrospectives = {}
 
-# ----------------------- Вопросы теста -----------------------
+# Вопросы для теста
 FIXED_QUESTIONS = [
     "1. Как вы оцениваете свое физическое состояние сейчас? (1 – очень плохое, 7 – отличное)",
     "2. Чувствуете ли вы себя бодрым/здоровым? (1 – ощущаю сильную усталость/болезнь, 7 – полностью бодрый и здоровый)",
@@ -71,18 +77,16 @@ OPEN_QUESTIONS = [
     "8. Что больше всего повлияло на ваше состояние сегодня?"
 ]
 
-# ----------------------- Функции формирования промптов -----------------------
-
 def build_prompt_for_test(test_answers: dict) -> str:
     """
-    Формирует промпт для анализа теста.
+    Формирует текст запроса для анализа теста.
     """
     standard = (
         "Вы профессиональный психолог с 10-летним стажем. "
-        "Ваш клиент прошёл психологический тест (ежедневный тест). "
-        "Проанализируйте его ответы и дайте развернутую интерпретацию его состояния, "
+        "Ваш клиент прошёл ежедневный психологический тест. "
+        "Проанализируйте его ответы, дайте развернутую интерпретацию состояния, "
         "используя научные термины и принципы когнитивной психологии. "
-        "Обратите внимание на открытые вопросы и, если необходимо, задайте уточняющие вопросы."
+        "При необходимости задайте уточняющие вопросы."
     )
     prompt = standard + "\n\n"
     all_questions = FIXED_QUESTIONS + OPEN_QUESTIONS
@@ -91,31 +95,30 @@ def build_prompt_for_test(test_answers: dict) -> str:
         answer = test_answers.get(key, "не указано")
         prompt += f"{i}. {question}\n   Ответ: {answer}\n"
     prompt += "\nСформируй развернутый анализ состояния клиента."
-    logger.info(f"Промпт для теста:\n{prompt}")
+    logger.info("Промпт для теста сформирован")
     return prompt
 
 def build_prompt_for_retro(averages: dict, test_count: int) -> str:
     """
-    Формирует промпт для ретроспективного анализа.
+    Формирует текст запроса для ретроспективного анализа.
     """
     standard = (
         "Вы профессиональный психолог с 10-летним стажем. "
-        "Ваш клиент прислал недельный тест. "
-        "Проанализируйте изменения в его состоянии за неделю, учитывая открытые ответы, "
-        "и дайте развернутую интерпретацию его эмоционального состояния с использованием научных терминов."
+        "Ваш клиент предоставил недельный тест. "
+        "Проанализируйте изменения его состояния за неделю, учитывая открытые ответы, "
+        "и дайте развернутую интерпретацию эмоционального состояния, используя научные термины."
     )
     prompt = standard + "\n\n"
     prompt += f"Количество тестов: {test_count}\n"
     for category, avg in averages.items():
         prompt += f"{category}: {avg}\n"
     prompt += "\nСформируй подробный анализ с рекомендациями."
-    logger.info(f"Промпт для ретроспективы:\n{prompt}")
+    logger.info("Промпт для ретроспективы сформирован")
     return prompt
 
 def build_prompt_for_chat(user_message: str, test_answers: dict) -> str:
     """
-    Формирует промпт для общения с Yandex GPT.
-    Включает результаты последнего теста для обеспечения контекста.
+    Формирует текст запроса для общения с Yandex GPT с учетом результатов последнего теста.
     """
     standard = (
         "Вы профессиональный психолог с 10-летним стажем. "
@@ -131,36 +134,34 @@ def build_prompt_for_chat(user_message: str, test_answers: dict) -> str:
         answer = test_answers.get(key, "не указано")
         prompt += f"{i}. {question}\n   Ответ: {answer}\n"
     prompt += "\nВопрос клиента: " + user_message + "\n"
-    logger.info(f"Промпт для чата:\n{prompt}")
+    logger.info("Промпт для чата сформирован")
     return prompt
 
-# ----------------------- Функция вызова Yandex GPT -----------------------
-
 async def call_yandex_gpt(prompt: str) -> str:
-    """Функция отправки запроса в Yandex GPT"""
+    """
+    Асинхронно отправляет запрос к Yandex GPT и возвращает сгенерированный текст.
+    """
     try:
-        logger.info(f"Отправка запроса в Yandex GPT:\n{prompt}")
+        logger.info("Отправка запроса в Yandex GPT")
         request = TextGenerationRequest(
             model="yandex-gpt",
             prompt=prompt,
             max_tokens=200
         )
-        # Синхронный вызов метода генерации текста
-        response = gpt_client.GenerateText(request)
-        logger.info(f"Ответ от Yandex GPT: {response}")
+        # Вызываем синхронный метод в отдельном потоке, чтобы не блокировать цикл событий
+        response = await asyncio.to_thread(gpt_client.GenerateText, request)
+        logger.info("Получен ответ от Yandex GPT")
         return response.text if response.text else "Ошибка: пустой ответ от Yandex GPT"
     except Exception as e:
         logger.error(f"Ошибка вызова Yandex GPT: {e}")
         return f"Ошибка вызова Yandex GPT: {e}"
 
-# ----------------------- Основное меню и обработчики команд -----------------------
+# Основные обработчики команд и диалогов Telegram-бота
 
 async def start(update: Update, context: CallbackContext) -> None:
     keyboard = [["Тест", "Ретроспектива", "Помощь"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     await update.message.reply_text("Добро пожаловать! Выберите действие:", reply_markup=reply_markup)
-
-# ----------------------- Разговор для прохождения теста -----------------------
 
 async def test_start(update: Update, context: CallbackContext) -> int:
     context.user_data['test_answers'] = {}
@@ -199,7 +200,7 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
     answer = update.message.text.strip()
     context.user_data['test_answers']['open_2'] = answer
 
-    # Сохранение данных теста в формате JSON
+    # Сохраняем данные теста в формате JSON
     user_id = update.message.from_user.id
     test_start_time = context.user_data.get("test_start_time", datetime.now().strftime("%Y%m%d_%H%M%S"))
     filename = os.path.join(DATA_DIR, f"{user_id}_{test_start_time}.json")
@@ -210,24 +211,23 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
     try:
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(test_data, f, ensure_ascii=False, indent=4)
-        logger.info(f"Тестовые данные сохранены в {filename}")
+        logger.info(f"Сохранены тестовые данные: {filename}")
     except Exception as e:
         logger.error(f"Ошибка при сохранении теста: {e}")
-        await update.message.reply_text("Произошла ошибка при сохранении данных теста.")
+        await update.message.reply_text("Ошибка при сохранении данных теста.")
         return ConversationHandler.END
 
-    # Сохраняем результаты теста для дальнейшего общения с Yandex GPT
     context.user_data["last_test_answers"] = context.user_data.get("test_answers", {})
 
-    # Формирование промпта для анализа теста и вызов Yandex GPT
+    # Формируем запрос для Yandex GPT и отправляем его
     prompt = build_prompt_for_test(context.user_data.get("test_answers", {}))
     response_text = await call_yandex_gpt(prompt)
     await update.message.reply_text(f"Результат анализа:\n{response_text}", reply_markup=ReplyKeyboardRemove())
 
-    # Если для пользователя запланирована ретроспектива и сегодня выбранный день – запускаем анализ
+    # Если у пользователя запланирована ретроспектива, проверяем и запускаем её
     await check_and_run_scheduled_retrospective(update, context)
 
-    # После теста предлагаем выбор дальнейших действий
+    # Предлагаем выбор дальнейших действий
     keyboard = [["Главное меню", "Пообщаться с Yandex GPT"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     await update.message.reply_text("Выберите дальнейшее действие:", reply_markup=reply_markup)
@@ -236,8 +236,6 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
 async def test_cancel(update: Update, context: CallbackContext) -> int:
     await update.message.reply_text("Тест отменён.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
-
-# ----------------------- Обработчик выбора после теста -----------------------
 
 async def after_test_choice_handler(update: Update, context: CallbackContext) -> int:
     choice = update.message.text.strip().lower()
@@ -261,14 +259,11 @@ async def yandex_chat_handler(update: Update, context: CallbackContext) -> int:
         await update.message.reply_text("Возвращаемся в главное меню.", reply_markup=ReplyKeyboardRemove())
         await start(update, context)
         return ConversationHandler.END
-    # Извлекаем результаты последнего теста для контекста
     test_answers = context.user_data.get("last_test_answers", {})
     prompt = build_prompt_for_chat(user_message, test_answers)
     response_text = await call_yandex_gpt(prompt)
     await update.message.reply_text(response_text)
     return YANDEX_CHAT
-
-# ----------------------- Разговор для ретроспективы -----------------------
 
 async def retrospective_start(update: Update, context: CallbackContext) -> int:
     keyboard = [["Ретроспектива сейчас", "Запланировать ретроспективу"]]
@@ -302,13 +297,13 @@ async def retrospective_schedule_day(update: Update, context: CallbackContext) -
         "воскресенье": 6
     }
     if day_text not in days_mapping:
-        await update.message.reply_text("Неверный ввод. Пожалуйста, выберите день недели.")
+        await update.message.reply_text("Неверный ввод. Выберите день недели.")
         return RETRO_SCHEDULE_DAY
     day_number = days_mapping[day_text]
     user_id = update.message.from_user.id
     scheduled_retrospectives[user_id] = day_number
     await update.message.reply_text(
-        f"Ретроспектива запланирована на {update.message.text.strip()}. После нового теста в этот день ретроспектива будет выполнена автоматически.",
+        f"Ретроспектива запланирована на {update.message.text.strip()}. После нового теста в этот день отчет будет сформирован автоматически.",
         reply_markup=ReplyKeyboardRemove()
     )
     return ConversationHandler.END
@@ -332,7 +327,6 @@ async def run_retrospective_now(update: Update, context: CallbackContext):
     if len(tests) < 4:
         await update.message.reply_text("Недостаточно данных для ретроспективы. Пройдите тест минимум 4 раза за 7 дней.")
         return
-    # Вычисляем средние показатели по фиксированным вопросам
     sums = {f"fixed_{i}": 0 for i in range(1, 7)}
     counts = {f"fixed_{i}": 0 for i in range(1, 7)}
     for test in tests:
@@ -363,8 +357,6 @@ async def run_retrospective_now(update: Update, context: CallbackContext):
     response_text = await call_yandex_gpt(prompt)
     await update.message.reply_text(f"Ретроспектива за последнюю неделю:\n{response_text}")
 
-# ----------------------- Автоматический запуск запланированной ретроспективы (после теста) -----------------------
-
 async def check_and_run_scheduled_retrospective(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
     if user_id in scheduled_retrospectives:
@@ -391,29 +383,22 @@ async def check_and_run_scheduled_retrospective(update: Update, context: Callbac
             else:
                 await update.message.reply_text("Запланированная ретроспектива не выполнена: недостаточно данных (не менее 4 тестов за 7 дней).")
 
-# ----------------------- Команда "Помощь" -----------------------
-
 async def help_command(update: Update, context: CallbackContext) -> None:
     help_text = (
-        "Наш бот предназначен для оценки вашего текущего состояния с помощью короткого теста.\n\n"
+        "Бот предназначен для оценки вашего состояния с помощью ежедневного теста.\n\n"
         "Команды:\n"
-        "• Тест – пройти тест состояния (6 фиксированных вопросов с оценкой от 1 до 7 и 2 открытых вопроса).\n\n"
-        "• Ретроспектива – анализ изменений вашего состояния за последнюю неделю. Вы можете выбрать:\n"
-        "   – Ретроспектива сейчас (если у вас минимум 4 теста за 7 дней),\n"
-        "   – Запланировать ретроспективу (выберите день недели – отчет выполнится автоматически после нового теста в этот день).\n\n"
+        "• Тест – пройти тест (6 фиксированных вопросов и 2 открытых).\n"
+        "• Ретроспектива – анализ изменений за последнюю неделю. Вы можете выбрать:\n"
+        "   – Ретроспектива сейчас (при наличии минимум 4 тестов за 7 дней),\n"
+        "   – Запланировать ретроспективу (выбрать день недели для автоматического запуска после нового теста).\n"
         "• Помощь – справочная информация.\n\n"
-        "После теста вы можете перейти в режим общения с Yandex GPT, где бот будет отвечать на ваши вопросы, "
-        "учитывая результаты последнего теста. Для выхода из режима общения введите 'Главное меню'.\n\n"
-        "По вопросам доработки и предложений обращайтесь: @Nik_Ly."
+        "После теста можно перейти в режим общения с Yandex GPT. Для выхода в главное меню введите 'Главное меню'.\n\n"
+        "По вопросам доработки обращайтесь: @Nik_Ly."
     )
     await update.message.reply_text(help_text, reply_markup=ReplyKeyboardRemove())
 
-# ----------------------- Глобальный обработчик ошибок -----------------------
-
 async def error_handler(update: object, context: CallbackContext) -> None:
     logger.error(f"Ошибка при обработке обновления {update}: {context.error}")
-
-# ----------------------- Основная функция -----------------------
 
 def main() -> None:
     TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -423,7 +408,7 @@ def main() -> None:
 
     app = Application.builder().token(TOKEN).build()
 
-    # ConversationHandler для теста и общения с Yandex GPT
+    # Обработчик для теста и общения с Yandex GPT
     test_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Тест$"), test_start)],
         states={
@@ -443,7 +428,7 @@ def main() -> None:
     )
     app.add_handler(test_conv_handler)
 
-    # ConversationHandler для ретроспективы
+    # Обработчик для ретроспективы
     retro_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Ретроспектива$"), retrospective_start)],
         states={
@@ -455,7 +440,6 @@ def main() -> None:
     )
     app.add_handler(retro_conv_handler)
 
-    # Команды /start и /help, а также обработка кнопки "Помощь"
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(MessageHandler(filters.Regex("^Помощь$"), help_command))
