@@ -34,12 +34,20 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
     file_path = os.path.join(DATA_DIR, f"{user_id}.csv")
 
     try:
+        # Логирование пути к файлам
+        logger.info(f"Путь к папке данных: {DATA_DIR}")
+        logger.info(f"Файл будет создан здесь: {file_path}")
+        
         # Проверка существования директории и ее создание при необходимости
         os.makedirs(DATA_DIR, exist_ok=True)
         
+        # Проверка прав на запись
+        if not os.access(DATA_DIR, os.W_OK):
+            raise PermissionError(f"Нет прав на запись в папку {DATA_DIR}")
+        
         # Проверка существования файла
         file_exists = os.path.isfile(file_path)
-
+        
         # Запись данных в файл
         with open(file_path, mode="a", newline="", encoding="utf-8") as file:
             writer = csv.writer(file)
@@ -49,8 +57,16 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
 
         await update.message.reply_text("Функционал ещё в разработке")
 
+    except PermissionError as e:
+        logger.error(f"Ошибка прав доступа: {e}")
+        await update.message.reply_text("Ошибка доступа к файлам. Проверьте права.")
+
+    except FileNotFoundError as e:
+        logger.error(f"Ошибка: папка или файл не найдены: {e}")
+        await update.message.reply_text("Ошибка: папка data не найдена.")
+
     except Exception as e:
-        logger.error(f"Ошибка при работе с файлом {file_path}: {e}")
+        logger.error(f"Неизвестная ошибка при работе с файлом {file_path}: {e}")
         await update.message.reply_text("Произошла ошибка при сохранении данных.")
 
 async def error_handler(update: object, context: CallbackContext) -> None:
