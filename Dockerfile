@@ -7,14 +7,14 @@ ENV PYTHONUNBUFFERED=1
 # Устанавливаем рабочую директорию внутри контейнера
 WORKDIR /app
 
-# При необходимости можно установить системные зависимости (например, gcc)
-# RUN apt-get update && apt-get install -y gcc
+# Создаем папку для хранения данных (DATA_DIR)
+RUN mkdir -p /app/data
 
 # Копируем файл зависимостей и устанавливаем их
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
-# Копируем весь исходный код проекта в контейнер
+# Копируем весь исходный код проекта в контейнер (включая .env, если требуется)
 COPY . .
 
 # Команда для запуска бота
