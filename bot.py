@@ -12,36 +12,24 @@ from telegram.ext import (
 
 from dotenv import load_dotenv
 
-import grpc
-from yandex.cloud.auth import Authenticator
-from yandex.cloud.ai.llm.v1.text_generation_service_pb2 import TextGenerationRequest
-from yandex.cloud.ai.llm.v1.text_generation_service_pb2_grpc import TextGenerationServiceStub
+# Импорт для работы с Yandex GPT через yandexcloud версии 0.331.0
+from yandexcloud import SDK
+from yandexcloud.ai.llm.v1.text_generation_service_pb2 import TextGenerationRequest
+from yandexcloud.ai.llm.v1.text_generation_service_pb2_grpc import TextGenerationServiceStub
 
-# Загружаем переменные окружения из .env файла
+# Загружаем переменные окружения из .env
 load_dotenv()
 
-# Получение учетных данных для Яндекс
+# Получение IAM-токена для доступа к Yandex GPT
 YANDEX_IAM_TOKEN = os.getenv("YANDEX_IAM_TOKEN")
-SERVICE_ACCOUNT_KEY_PATH = os.getenv("SERVICE_ACCOUNT_KEY_PATH", None)
-if not YANDEX_IAM_TOKEN and not SERVICE_ACCOUNT_KEY_PATH:
-    raise ValueError("Ошибка: необходимо задать YANDEX_IAM_TOKEN или SERVICE_ACCOUNT_KEY_PATH в переменных окружения.")
+if not YANDEX_IAM_TOKEN:
+    raise ValueError("Ошибка: Не задан YANDEX_IAM_TOKEN в переменных окружения.")
 
-def create_yandex_gpt_client():
-    """
-    Создает клиента для работы с Yandex GPT с использованием актуальной авторизации.
-    Если задан IAM-токен, используется он, иначе – ключ сервисного аккаунта.
-    """
-    if YANDEX_IAM_TOKEN:
-        authenticator = Authenticator(iam_token=YANDEX_IAM_TOKEN)
-    else:
-        authenticator = Authenticator(service_account_key=SERVICE_ACCOUNT_KEY_PATH)
-    channel = grpc.secure_channel('llm.api.cloud.yandex.net:443', authenticator)
-    return TextGenerationServiceStub(channel)
+# Инициализация SDK с использованием IAM-токена (yandexcloud==0.331.0)
+sdk = SDK(iam_token=YANDEX_IAM_TOKEN)
+gpt_client = sdk.client(TextGenerationServiceStub)
 
-# Инициализируем клиента Yandex GPT
-gpt_client = create_yandex_gpt_client()
-
-# Каталог для хранения JSON с тестовыми данными
+# Определяем каталог для хранения данных
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
@@ -55,15 +43,15 @@ logger = logging.getLogger(__name__)
 logger.info(f"YANDEX_IAM_TOKEN загружен: {bool(YANDEX_IAM_TOKEN)}")
 logger.info(f"DATA_DIR установлен: {DATA_DIR}")
 
-# Определение состояний для диалога (ConversationHandler)
+# Состояния для ConversationHandler
 TEST_FIXED_1, TEST_FIXED_2, TEST_FIXED_3, TEST_FIXED_4, TEST_FIXED_5, TEST_FIXED_6, TEST_OPEN_1, TEST_OPEN_2 = range(8)
 RETRO_CHOICE, RETRO_SCHEDULE_DAY = range(8, 10)
 AFTER_TEST_CHOICE, YANDEX_CHAT = range(10, 12)
 
-# Глобальный словарь для запланированных ретроспектив (user_id -> день недели, где 0 – понедельник, ... 6 – воскресенье)
+# Глобальный словарь для запланированных ретроспектив (user_id -> номер дня недели: 0 – понедельник, …, 6 – воскресенье)
 scheduled_retrospectives = {}
 
-# Вопросы для теста
+# Вопросы теста
 FIXED_QUESTIONS = [
     "1. Как вы оцениваете свое физическое состояние сейчас? (1 – очень плохое, 7 – отличное)",
     "2. Чувствуете ли вы себя бодрым/здоровым? (1 – ощущаю сильную усталость/болезнь, 7 – полностью бодрый и здоровый)",
@@ -79,7 +67,7 @@ OPEN_QUESTIONS = [
 
 def build_prompt_for_test(test_answers: dict) -> str:
     """
-    Формирует текст запроса для анализа теста.
+    Формирует промпт для анализа теста.
     """
     standard = (
         "Вы профессиональный психолог с 10-летним стажем. "
@@ -100,7 +88,7 @@ def build_prompt_for_test(test_answers: dict) -> str:
 
 def build_prompt_for_retro(averages: dict, test_count: int) -> str:
     """
-    Формирует текст запроса для ретроспективного анализа.
+    Формирует промпт для ретроспективного анализа.
     """
     standard = (
         "Вы профессиональный психолог с 10-летним стажем. "
@@ -118,7 +106,7 @@ def build_prompt_for_retro(averages: dict, test_count: int) -> str:
 
 def build_prompt_for_chat(user_message: str, test_answers: dict) -> str:
     """
-    Формирует текст запроса для общения с Yandex GPT с учетом результатов последнего теста.
+    Формирует промпт для общения с Yandex GPT, учитывая результаты последнего теста.
     """
     standard = (
         "Вы профессиональный психолог с 10-летним стажем. "
@@ -139,7 +127,8 @@ def build_prompt_for_chat(user_message: str, test_answers: dict) -> str:
 
 async def call_yandex_gpt(prompt: str) -> str:
     """
-    Асинхронно отправляет запрос к Yandex GPT и возвращает сгенерированный текст.
+    Асинхронно отправляет запрос к Yandex GPT и возвращает сгенерированный ответ.
+    Обертка для синхронного метода GenerateText, выполненного в отдельном потоке.
     """
     try:
         logger.info("Отправка запроса в Yandex GPT")
@@ -148,7 +137,7 @@ async def call_yandex_gpt(prompt: str) -> str:
             prompt=prompt,
             max_tokens=200
         )
-        # Вызываем синхронный метод в отдельном потоке, чтобы не блокировать цикл событий
+        # Оборачиваем синхронный вызов в asyncio.to_thread
         response = await asyncio.to_thread(gpt_client.GenerateText, request)
         logger.info("Получен ответ от Yandex GPT")
         return response.text if response.text else "Ошибка: пустой ответ от Yandex GPT"
@@ -156,7 +145,7 @@ async def call_yandex_gpt(prompt: str) -> str:
         logger.error(f"Ошибка вызова Yandex GPT: {e}")
         return f"Ошибка вызова Yandex GPT: {e}"
 
-# Основные обработчики команд и диалогов Telegram-бота
+# Обработчики команд и диалогов Telegram-бота
 
 async def start(update: Update, context: CallbackContext) -> None:
     keyboard = [["Тест", "Ретроспектива", "Помощь"]]
@@ -200,7 +189,7 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
     answer = update.message.text.strip()
     context.user_data['test_answers']['open_2'] = answer
 
-    # Сохраняем данные теста в формате JSON
+    # Сохраняем данные теста в JSON
     user_id = update.message.from_user.id
     test_start_time = context.user_data.get("test_start_time", datetime.now().strftime("%Y%m%d_%H%M%S"))
     filename = os.path.join(DATA_DIR, f"{user_id}_{test_start_time}.json")
@@ -219,15 +208,15 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
 
     context.user_data["last_test_answers"] = context.user_data.get("test_answers", {})
 
-    # Формируем запрос для Yandex GPT и отправляем его
+    # Формирование запроса к Yandex GPT
     prompt = build_prompt_for_test(context.user_data.get("test_answers", {}))
     response_text = await call_yandex_gpt(prompt)
     await update.message.reply_text(f"Результат анализа:\n{response_text}", reply_markup=ReplyKeyboardRemove())
 
-    # Если у пользователя запланирована ретроспектива, проверяем и запускаем её
+    # Проверка и запуск запланированной ретроспективы (если задана)
     await check_and_run_scheduled_retrospective(update, context)
 
-    # Предлагаем выбор дальнейших действий
+    # Выбор дальнейших действий
     keyboard = [["Главное меню", "Пообщаться с Yandex GPT"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     await update.message.reply_text("Выберите дальнейшее действие:", reply_markup=reply_markup)
