@@ -1,5 +1,7 @@
 import os
 import logging
+import csv
+from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
@@ -24,10 +26,16 @@ async def handle_message(update: Update, context: CallbackContext) -> None:
         return
     user_id = update.message.from_user.id
     user_choice = update.message.text
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    os.makedirs("data/test", exist_ok=True)
-    with open(f"data/test/{user_id}.txt", "w") as file:
-        file.write(f"User ID: {user_id}\nВыбор: {user_choice}")
+    file_path = f"data/{user_id}.csv"
+    file_exists = os.path.isfile(file_path)
+    
+    with open(file_path, mode="a", newline="", encoding="utf-8") as file:
+        writer = csv.writer(file)
+        if not file_exists:
+            writer.writerow(["Дата и время", "Команда"])
+        writer.writerow([timestamp, user_choice])
     
     await update.message.reply_text("Функционал ещё в разработке")
 
