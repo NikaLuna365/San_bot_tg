@@ -10,12 +10,16 @@ from telegram.ext import (
     filters, CallbackContext
 )
 
-# Импорт официального SDK для Gemini от Google
-from google.generativeai import GenerativeModel, configure
+# Импорт загрузчика переменных окружения и SDK Yandex Cloud
+from dotenv import load_dotenv
+from yandexcloud import SDK
+
+# Загружаем переменные из .env
+load_dotenv()
 
 # ----------------------- Настройка логирования -----------------------
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", 
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
@@ -26,12 +30,12 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # ----------------------- Состояния для ConversationHandler -----------------------
-# Состояния прохождения теста (6 фиксированных + 2 открытых)
+# Состояния прохождения теста (6 фиксированных вопросов + 2 открытых)
 TEST_FIXED_1, TEST_FIXED_2, TEST_FIXED_3, TEST_FIXED_4, TEST_FIXED_5, TEST_FIXED_6, TEST_OPEN_1, TEST_OPEN_2 = range(8)
 # Состояния для ретроспективы
 RETRO_CHOICE, RETRO_SCHEDULE_DAY = range(8, 10)
-# Состояния после теста: выбор дальнейших действий и режим общения с Gemini
-AFTER_TEST_CHOICE, GEMINI_CHAT = range(10, 12)
+# Состояния после теста: выбор дальнейших действий и режим общения с Yandex GPT
+AFTER_TEST_CHOICE, YANDEX_CHAT = range(10, 12)
 
 # Глобальный словарь для запланированных ретроспектив (user_id -> weekday, где 0 – понедельник, …, 6 – воскресенье)
 scheduled_retrospectives = {}
@@ -50,12 +54,12 @@ OPEN_QUESTIONS = [
     "8. Что больше всего повлияло на ваше состояние сегодня?"
 ]
 
-# ----------------------- Функции формирования промптов для Gemini -----------------------
+# ----------------------- Функции формирования промптов для Yandex GPT -----------------------
 
 def build_gemini_prompt_for_test(test_answers: dict) -> str:
     """
     Формирует промпт для анализа теста.
-    Используется стандартное вступление для ежедневного теста с подробным описанием ответов.
+    (Промпт остаётся прежним, лишь функция вызова теперь использует Yandex GPT.)
     """
     standard = (
         "Вы профессиональный психолог с 10-летним стажем. "
@@ -94,7 +98,7 @@ def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
 
 def build_gemini_prompt_for_chat(user_message: str, test_answers: dict) -> str:
     """
-    Формирует промпт для режима общения с Gemini.
+    Формирует промпт для режима общения с Yandex GPT.
     Включает стандартное вступление, результаты последнего теста и вопрос клиента.
     """
     standard = (
@@ -114,29 +118,24 @@ def build_gemini_prompt_for_chat(user_message: str, test_answers: dict) -> str:
     logger.info(f"Промпт для чата с тестовыми результатами:\n{prompt}")
     return prompt
 
-# ----------------------- Функция вызова Gemini API через официальный SDK -----------------------
+# ----------------------- Функция вызова Yandex GPT -----------------------
 
-async def call_gemini_api(prompt: str) -> dict:
-    """
-    Отправляет запрос к Gemini API с использованием официального SDK.
-    Если возникает ошибка (например, неверный ключ или ошибка сервера), она логируется.
-    """
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        logger.error("GEMINI_API_KEY не задан в переменных окружения.")
-        return {"interpretation": "Ошибка: API ключ не задан."}
+async def call_yandex_gpt(prompt: str) -> str:
+    """Функция отправки запроса в Yandex GPT"""
     try:
-        configure(api_key=api_key)
-        model = GenerativeModel("gemini-1.5-flash")
-        logger.info(f"Отправка запроса к Gemini API с промптом:\n{prompt}")
-        # Выполняем вызов модели в отдельном потоке, чтобы не блокировать event loop
-        response = await asyncio.to_thread(model.generate_content, prompt=prompt)
-        interpretation = response.get("content", "Нет ответа от Gemini.")
-        logger.info(f"Ответ от Gemini: {interpretation}")
-        return {"interpretation": interpretation}
+        sdk = SDK(oauth_token=os.getenv("YANDEX_API_KEY"))
+        model = sdk.ai.gpt().completion("yandex.gpt")
+        result = model.generate(prompt=prompt)
+        text = result.get("text")
+        if text:
+            logger.info(f"Ответ от Yandex GPT: {text}")
+            return text
+        else:
+            logger.error("Ошибка: пустой ответ от Yandex GPT")
+            return "Ошибка: пустой ответ от Yandex GPT"
     except Exception as e:
-        logger.error(f"Ошибка при вызове Gemini API: {e}")
-        return {"interpretation": "Ошибка при обращении к Gemini API."}
+        logger.error(f"Ошибка вызова Yandex GPT: {e}")
+        return f"Ошибка вызова Yandex GPT: {e}"
 
 # ----------------------- Основное меню и обработчики команд -----------------------
 
@@ -184,7 +183,7 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
     answer = update.message.text.strip()
     context.user_data['test_answers']['open_2'] = answer
 
-    # Сохранение данных теста в JSON
+    # Сохранение данных теста в формате JSON
     user_id = update.message.from_user.id
     test_start_time = context.user_data.get("test_start_time", datetime.now().strftime("%Y%m%d_%H%M%S"))
     filename = os.path.join(DATA_DIR, f"{user_id}_{test_start_time}.json")
@@ -201,20 +200,19 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
         await update.message.reply_text("Произошла ошибка при сохранении данных теста.")
         return ConversationHandler.END
 
-    # Сохраняем результаты теста для дальнейшего общения с Gemini
+    # Сохраняем результаты теста для дальнейшего общения с Yandex GPT
     context.user_data["last_test_answers"] = context.user_data.get("test_answers", {})
 
-    # Формирование промпта для анализа теста и вызов Gemini API
+    # Формирование промпта для анализа теста и вызов Yandex GPT
     prompt = build_gemini_prompt_for_test(context.user_data.get("test_answers", {}))
-    gemini_response = await call_gemini_api(prompt)
-    interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
-    await update.message.reply_text(f"Результат анализа:\n{interpretation}", reply_markup=ReplyKeyboardRemove())
+    response_text = await call_yandex_gpt(prompt)
+    await update.message.reply_text(f"Результат анализа:\n{response_text}", reply_markup=ReplyKeyboardRemove())
 
     # Если для пользователя запланирована ретроспектива и сегодня выбранный день – запускаем анализ
     await check_and_run_scheduled_retrospective(update, context)
 
     # После теста предлагаем выбор дальнейших действий
-    keyboard = [["Главное меню", "Пообщаться с Gemini"]]
+    keyboard = [["Главное меню", "Пообщаться с Yandex GPT"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     await update.message.reply_text("Выберите дальнейшее действие:", reply_markup=reply_markup)
     return AFTER_TEST_CHOICE
@@ -231,29 +229,30 @@ async def after_test_choice_handler(update: Update, context: CallbackContext) ->
         await update.message.reply_text("Возвращаемся в главное меню.", reply_markup=ReplyKeyboardRemove())
         await start(update, context)
         return ConversationHandler.END
-    elif choice == "пообщаться с gemini":
+    elif choice == "пообщаться с yandex gpt":
         await update.message.reply_text(
-            "Введите сообщение для общения с Gemini. Для выхода в главное меню введите 'Главное меню'.",
+            "Введите сообщение для общения с Yandex GPT. Для выхода в главное меню введите 'Главное меню'.",
             reply_markup=ReplyKeyboardRemove()
         )
-        return GEMINI_CHAT
+        return YANDEX_CHAT
     else:
-        await update.message.reply_text("Пожалуйста, выберите: 'Главное меню' или 'Пообщаться с Gemini'.")
+        await update.message.reply_text("Пожалуйста, выберите: 'Главное меню' или 'Пообщаться с Yandex GPT'.")
         return AFTER_TEST_CHOICE
 
-async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
-    message = update.message.text.strip()
-    if message.lower() == "главное меню":
+# ----------------------- Режим общения с Yandex GPT -----------------------
+
+async def yandex_chat_handler(update: Update, context: CallbackContext) -> int:
+    user_message = update.message.text.strip()
+    if user_message.lower() == "главное меню":
         await update.message.reply_text("Возвращаемся в главное меню.", reply_markup=ReplyKeyboardRemove())
         await start(update, context)
         return ConversationHandler.END
-    # Извлекаем результаты последнего теста для контекста
+    # Извлекаем результаты последнего теста для включения в контекст
     test_answers = context.user_data.get("last_test_answers", {})
-    prompt = build_gemini_prompt_for_chat(message, test_answers)
-    gemini_response = await call_gemini_api(prompt)
-    answer = gemini_response.get("interpretation", "Нет ответа от Gemini.")
-    await update.message.reply_text(answer)
-    return GEMINI_CHAT
+    prompt = build_gemini_prompt_for_chat(user_message, test_answers)
+    response_text = await call_yandex_gpt(prompt)
+    await update.message.reply_text(response_text)
+    return YANDEX_CHAT
 
 # ----------------------- Разговор для ретроспективы -----------------------
 
@@ -347,9 +346,8 @@ async def run_retrospective_now(update: Update, context: CallbackContext):
         averages["Настроение"] = None
 
     prompt = build_gemini_prompt_for_retro(averages, len(tests))
-    gemini_response = await call_gemini_api(prompt)
-    interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
-    await update.message.reply_text(f"Ретроспектива за последнюю неделю:\n{interpretation}")
+    response_text = await call_yandex_gpt(prompt)
+    await update.message.reply_text(f"Ретроспектива за последнюю неделю:\n{response_text}")
 
 # ----------------------- Автоматический запуск запланированной ретроспективы (после теста) -----------------------
 
@@ -390,8 +388,8 @@ async def help_command(update: Update, context: CallbackContext) -> None:
         "   – Ретроспектива сейчас (если у вас минимум 4 теста за 7 дней),\n"
         "   – Запланировать ретроспективу (выберите день недели – отчет выполнится автоматически после нового теста в этот день).\n\n"
         "• Помощь – справочная информация.\n\n"
-        "После теста вы можете перейти в режим общения с Gemini, где бот будет отвечать на ваши вопросы, учитывая результаты последнего теста.\n"
-        "Для выхода из режима общения введите 'Главное меню'.\n\n"
+        "После теста вы можете перейти в режим общения с Yandex GPT, где бот будет отвечать на ваши вопросы, "
+        "учитывая результаты последнего теста. Для выхода из режима общения введите 'Главное меню'.\n\n"
         "По вопросам доработки и предложений обращайтесь: @Nik_Ly."
     )
     await update.message.reply_text(help_text, reply_markup=ReplyKeyboardRemove())
@@ -411,7 +409,7 @@ def main() -> None:
 
     app = Application.builder().token(TOKEN).build()
 
-    # ConversationHandler для теста (с последующим выбором действий и режимом общения с Gemini)
+    # ConversationHandler для теста с последующим выбором действий и режимом общения с Yandex GPT
     test_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Тест$"), test_start)],
         states={
@@ -424,7 +422,7 @@ def main() -> None:
             TEST_OPEN_1:  [MessageHandler(filters.TEXT & ~filters.COMMAND, test_open_1)],
             TEST_OPEN_2:  [MessageHandler(filters.TEXT & ~filters.COMMAND, test_open_2)],
             AFTER_TEST_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, after_test_choice_handler)],
-            GEMINI_CHAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gemini_chat_handler)]
+            YANDEX_CHAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, yandex_chat_handler)]
         },
         fallbacks=[CommandHandler("cancel", test_cancel)],
         allow_reentry=True
