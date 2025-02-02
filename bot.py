@@ -10,19 +10,25 @@ from telegram.ext import (
     filters, CallbackContext
 )
 
-# Импорт загрузчика переменных окружения и SDK Yandex Cloud
+# Импорт загрузчика переменных окружения
 from dotenv import load_dotenv
-from yandexcloud import SDK
 
-# Загружаем переменные из .env
+# Импорт SDK и необходимых протобаф-сообщений для работы с Yandex GPT
+from yandex.cloud import SDK
+from yandex.cloud.ai.llm.v1.text_generation_service_pb2 import TextGenerationRequest
+from yandex.cloud.ai.llm.v1.text_generation_service_pb2_grpc import TextGenerationServiceStub
+
+# Загружаем переменные окружения из .env
 load_dotenv()
 
-# Получаем API-ключи для Yandex GPT
-YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
-YANDEX_KEY_ID = os.getenv("YANDEX_KEY_ID")
+# Получаем IAM-токен для доступа к Yandex GPT
+YANDEX_IAM_TOKEN = os.getenv("YANDEX_IAM_TOKEN")
+if not YANDEX_IAM_TOKEN:
+    raise ValueError("Ошибка: Не настроен YANDEX_IAM_TOKEN. Проверьте .env файл.")
 
-if not YANDEX_API_KEY or not YANDEX_KEY_ID:
-    raise ValueError("Ошибка: Не настроены API-ключи Yandex GPT. Проверьте .env файл.")
+# Инициализируем SDK и создаём клиента для Yandex GPT
+sdk = SDK(iam_token=YANDEX_IAM_TOKEN)
+gpt_client = sdk.client(TextGenerationServiceStub)
 
 # Определяем DATA_DIR: берем из переменной окружения или ставим значение по умолчанию
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
@@ -35,8 +41,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-logger.info(f"YANDEX_API_KEY загружен: {bool(YANDEX_API_KEY)}")
-logger.info(f"YANDEX_KEY_ID загружен: {bool(YANDEX_KEY_ID)}")
+logger.info(f"YANDEX_IAM_TOKEN загружен: {bool(YANDEX_IAM_TOKEN)}")
 logger.info(f"DATA_DIR установлен: {DATA_DIR}")
 
 # ----------------------- Состояния для ConversationHandler -----------------------
@@ -130,15 +135,20 @@ def build_prompt_for_chat(user_message: str, test_answers: dict) -> str:
 # ----------------------- Функция вызова Yandex GPT -----------------------
 
 async def call_yandex_gpt(prompt: str) -> str:
-    """Функция отправки запроса в Yandex GPT через официальный SDK"""
+    """Функция отправки запроса в Yandex GPT через SDK с использованием актуальных методов"""
     try:
         logger.info(f"Отправка запроса в Yandex GPT:\n{prompt}")
-        sdk = SDK(oauth_token=YANDEX_API_KEY)
-        model = sdk.ai.gpt().completion("yandex.gpt")
-        result = model.generate(prompt=prompt)
-        logger.info(f"Ответ от Yandex GPT: {result}")
-        if result and 'text' in result:
-            return result['text']
+        # Создаём запрос к сервису текстовой генерации
+        request = TextGenerationRequest(
+            model="yandex-gpt",
+            prompt=prompt,
+            max_tokens=200
+        )
+        # Выполняем вызов синхронно в отдельном потоке
+        response = await asyncio.to_thread(gpt_client.GenerateText, request)
+        logger.info(f"Ответ от Yandex GPT: {response}")
+        if response and response.text:
+            return response.text
         else:
             return "Ошибка: пустой ответ от Yandex GPT"
     except Exception as e:
