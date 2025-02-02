@@ -1,2 +1,4 @@
-python-telegram-bot
-python-dotenv
+python-telegram-bot==20.3
+pandas==1.5.3
+apscheduler==3.9.1
+aiohttp==3.8.1
