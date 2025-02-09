@@ -129,8 +129,8 @@ async def call_gemini_api(prompt: str) -> dict:
         configure(api_key=api_key)
         model = GenerativeModel("gemini-1.5-flash")
         logger.info(f"Отправка запроса к Gemini API с промптом:\n{prompt}")
-        # Выполняем вызов модели в отдельном потоке, чтобы не блокировать event loop
-        response = await asyncio.to_thread(model.generate_content, prompt=prompt)
+        # Обратите внимание: теперь передаём список с одним промптом
+        response = await asyncio.to_thread(model.generate_content, [prompt])
         interpretation = response.get("content", "Нет ответа от Gemini.")
         logger.info(f"Ответ от Gemini: {interpretation}")
         return {"interpretation": interpretation}
