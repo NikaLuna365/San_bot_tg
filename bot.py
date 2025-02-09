@@ -12,24 +12,25 @@ from telegram.ext import (
 from dotenv import load_dotenv
 
 # Новый импорт для работы с Yandex GPT через AsyncYCloudML
-from yandexcloud import AsyncYCloudML
+from yandex_cloud_ml_sdk import AsyncYCloudML
 
 # Загружаем переменные окружения из .env
 load_dotenv()
 
 # Получение переменных окружения:
 # TELEGRAM_BOT_TOKEN – токен Telegram-бота
-# YANDEX_FOLDER_ID – folder_id для доступа к Yandex GPT (обязательно)
+# FOLDER_ID – folder_id для доступа к Yandex GPT (обязательно)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_BOT_TOKEN:
     raise ValueError("Ошибка: TELEGRAM_BOT_TOKEN не задан в переменных окружения.")
 
-YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
-if not YANDEX_FOLDER_ID:
-    raise ValueError("Ошибка: YANDEX_FOLDER_ID не задан в переменных окружения.")
+FOLDER_ID = os.getenv("FOLDER_ID")
+if not FOLDER_ID:
+    raise ValueError("Ошибка: FOLDER_ID не задан в переменных окружения.")
 
-# Инициализация AsyncYCloudML с folder_id
-sdk = AsyncYCloudML(folder_id=YANDEX_FOLDER_ID)
+# Инициализация AsyncYCloudML с folder_id и получение модели completions для 'yandexgpt'
+sdk = AsyncYCloudML(folder_id=FOLDER_ID)
+model = sdk.models.completions('yandexgpt')
 
 # Определяем каталог для хранения данных
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
@@ -42,7 +43,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-logger.info(f"YANDEX_FOLDER_ID загружен: {YANDEX_FOLDER_ID}")
+logger.info(f"FOLDER_ID загружен: {FOLDER_ID}")
 logger.info(f"DATA_DIR установлен: {DATA_DIR}")
 
 # Состояния для ConversationHandler
@@ -129,22 +130,13 @@ def build_prompt_for_chat(user_message: str, test_answers: dict) -> str:
 
 async def call_yandex_gpt(prompt: str) -> str:
     """
-    Асинхронно отправляет запрос к Yandex GPT через AsyncYCloudML и возвращает сгенерированный ответ.
-    Использует модель 'yandexgpt' с конфигурацией: температура 0.8 и max_tokens=200.
-    Результат — список альтернатив, который объединяется в итоговый ответ.
+    Асинхронно отправляет запрос к Yandex GPT через AsyncYCloudML.
+    Используется модель 'yandexgpt' с конфигурацией: температура 0.5.
+    Результат – список альтернатив, возвращается первая альтернатива.
     """
     try:
-        logger.info("Отправка запроса в Yandex GPT через AsyncYCloudML")
-        # Получаем объект модели completions для модели 'yandexgpt'
-        model = sdk.models.completions("yandexgpt")
-        # Конфигурируем модель: устанавливаем температуру 0.8 и максимальное число токенов (например, 200)
-        configured_model = model.configure(temperature=0.8, max_tokens=200)
-        # Выполняем запрос асинхронно и получаем список альтернатив
-        result = await configured_model.run(prompt)
-        # Обрабатываем результат как список альтернатив
-        response_text = "\n".join([alternative for alternative in result])
-        logger.info("Получен ответ от Yandex GPT")
-        return response_text if response_text else "Ошибка: пустой ответ от Yandex GPT"
+        result = await model.configure(temperature=0.5).run(prompt)
+        return result[0] if result else "Ошибка: пустой ответ от Yandex GPT"
     except Exception as e:
         logger.error(f"Ошибка вызова Yandex GPT: {e}")
         return f"Ошибка вызова Yandex GPT: {e}"
@@ -193,7 +185,7 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
     answer = update.message.text.strip()
     context.user_data['test_answers']['open_2'] = answer
 
-    # Сохраняем данные теста в JSON
+    # Сохранение данных теста в JSON
     user_id = update.message.from_user.id
     test_start_time = context.user_data.get("test_start_time", datetime.now().strftime("%Y%m%d_%H%M%S"))
     filename = os.path.join(DATA_DIR, f"{user_id}_{test_start_time}.json")
@@ -212,7 +204,7 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
 
     context.user_data["last_test_answers"] = context.user_data.get("test_answers", {})
 
-    # Формирование запроса к Yandex GPT
+    # Формирование промпта и вызов Yandex GPT
     prompt = build_prompt_for_test(context.user_data.get("test_answers", {}))
     response_text = await call_yandex_gpt(prompt)
     await update.message.reply_text(f"Результат анализа:\n{response_text}", reply_markup=ReplyKeyboardRemove())
@@ -354,7 +346,7 @@ async def check_and_run_scheduled_retrospective(update: Update, context: Callbac
     user_id = update.message.from_user.id
     if user_id in scheduled_retrospectives:
         scheduled_day = scheduled_retrospectives[user_id]
-        current_day = datetime.now().weekday()  # 0 – понедельник, 6 – воскресенье
+        current_day = datetime.now().weekday()
         if current_day == scheduled_day:
             now = datetime.now()
             one_week_ago = now - timedelta(days=7)
@@ -396,7 +388,6 @@ async def error_handler(update: object, context: CallbackContext) -> None:
 def main() -> None:
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # Обработчик для теста и общения с Yandex GPT
     test_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Тест$"), test_start)],
         states={
@@ -416,7 +407,6 @@ def main() -> None:
     )
     app.add_handler(test_conv_handler)
 
-    # Обработчик для ретроспективы
     retro_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Ретроспектива$"), retrospective_start)],
         states={
