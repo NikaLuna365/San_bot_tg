@@ -138,8 +138,13 @@ async def call_yandex_gpt(prompt: str) -> str:
         result = await model.configure(temperature=0.5).run(prompt)
         return result[0] if result else "Ошибка: пустой ответ от Yandex GPT"
     except Exception as e:
-        logger.error(f"Ошибка вызова Yandex GPT: {e}")
-        return f"Ошибка вызова Yandex GPT: {e}"
+        logger.error(f"Ошибка вызова Yandex GPT: {e}", exc_info=True)
+        return "Произошла ошибка при обращении к Yandex GPT. Подробности в логах."
+
+# Вспомогательная функция для асинхронного сохранения данных в файл
+def save_data_to_file(filename, data):
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
 
 # Обработчики команд и диалогов Telegram-бота
 
@@ -185,7 +190,7 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
     answer = update.message.text.strip()
     context.user_data['test_answers']['open_2'] = answer
 
-    # Сохранение данных теста в JSON
+    # Асинхронное сохранение данных теста в JSON
     user_id = update.message.from_user.id
     test_start_time = context.user_data.get("test_start_time", datetime.now().strftime("%Y%m%d_%H%M%S"))
     filename = os.path.join(DATA_DIR, f"{user_id}_{test_start_time}.json")
@@ -194,11 +199,10 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
         "test_answers": context.user_data.get("test_answers", {})
     }
     try:
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(test_data, f, ensure_ascii=False, indent=4)
+        await asyncio.to_thread(save_data_to_file, filename, test_data)
         logger.info(f"Сохранены тестовые данные: {filename}")
     except Exception as e:
-        logger.error(f"Ошибка при сохранении теста: {e}")
+        logger.error(f"Ошибка при сохранении теста: {e}", exc_info=True)
         await update.message.reply_text("Ошибка при сохранении данных теста.")
         return ConversationHandler.END
 
