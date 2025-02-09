@@ -17,9 +17,7 @@ from yandex_cloud_ml_sdk import AsyncYCloudML
 # Загружаем переменные окружения из .env
 load_dotenv()
 
-# Получение переменных окружения:
-# TELEGRAM_BOT_TOKEN – токен Telegram-бота
-# FOLDER_ID – folder_id для доступа к Yandex GPT (обязательно)
+# Получение переменных окружения для Telegram-бота и Yandex Cloud
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_BOT_TOKEN:
     raise ValueError("Ошибка: TELEGRAM_BOT_TOKEN не задан в переменных окружения.")
@@ -28,8 +26,12 @@ FOLDER_ID = os.getenv("FOLDER_ID")
 if not FOLDER_ID:
     raise ValueError("Ошибка: FOLDER_ID не задан в переменных окружения.")
 
-# Инициализация AsyncYCloudML с folder_id и получение модели completions для 'yandexgpt'
-sdk = AsyncYCloudML(folder_id=FOLDER_ID)
+IAM_TOKEN = os.getenv("YANDEX_IAM_TOKEN")
+KEY_ID = os.getenv("YANDEX_KEY_ID")
+
+# Инициализация AsyncYCloudML с передачей folder_id, iam_token и key_id,
+# получение модели completions для 'yandexgpt'
+sdk = AsyncYCloudML(folder_id=FOLDER_ID, iam_token=IAM_TOKEN, key_id=KEY_ID)
 model = sdk.models.completions('yandexgpt')
 
 # Определяем каталог для хранения данных
