@@ -9,25 +9,27 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler, ConversationHandler,
     filters, CallbackContext
 )
-
 from dotenv import load_dotenv
 
-# Импорт для работы с Yandex GPT через yandexcloud версии 0.331.0
-from yandexcloud import SDK
-from yandexcloud.ai.llm.v1.text_generation_service_pb2 import TextGenerationRequest
-from yandexcloud.ai.llm.v1.text_generation_service_pb2_grpc import TextGenerationServiceStub
+# Новый импорт для работы с Yandex GPT через AsyncYCloudML
+from yandexcloud import AsyncYCloudML
 
 # Загружаем переменные окружения из .env
 load_dotenv()
 
-# Получение IAM-токена для доступа к Yandex GPT
-YANDEX_IAM_TOKEN = os.getenv("YANDEX_IAM_TOKEN")
-if not YANDEX_IAM_TOKEN:
-    raise ValueError("Ошибка: Не задан YANDEX_IAM_TOKEN в переменных окружения.")
+# Получение переменных окружения:
+# TELEGRAM_BOT_TOKEN – токен Telegram-бота
+# YANDEX_FOLDER_ID – folder_id для доступа к Yandex GPT (обязательно)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TELEGRAM_BOT_TOKEN:
+    raise ValueError("Ошибка: TELEGRAM_BOT_TOKEN не задан в переменных окружения.")
 
-# Инициализация SDK с использованием IAM-токена (yandexcloud==0.331.0)
-sdk = SDK(iam_token=YANDEX_IAM_TOKEN)
-gpt_client = sdk.client(TextGenerationServiceStub)
+YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
+if not YANDEX_FOLDER_ID:
+    raise ValueError("Ошибка: YANDEX_FOLDER_ID не задан в переменных окружения.")
+
+# Инициализация AsyncYCloudML с folder_id
+sdk = AsyncYCloudML(folder_id=YANDEX_FOLDER_ID)
 
 # Определяем каталог для хранения данных
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"))
@@ -40,7 +42,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-logger.info(f"YANDEX_IAM_TOKEN загружен: {bool(YANDEX_IAM_TOKEN)}")
+logger.info(f"YANDEX_FOLDER_ID загружен: {YANDEX_FOLDER_ID}")
 logger.info(f"DATA_DIR установлен: {DATA_DIR}")
 
 # Состояния для ConversationHandler
@@ -127,20 +129,22 @@ def build_prompt_for_chat(user_message: str, test_answers: dict) -> str:
 
 async def call_yandex_gpt(prompt: str) -> str:
     """
-    Асинхронно отправляет запрос к Yandex GPT и возвращает сгенерированный ответ.
-    Обертка для синхронного метода GenerateText, выполненного в отдельном потоке.
+    Асинхронно отправляет запрос к Yandex GPT через AsyncYCloudML и возвращает сгенерированный ответ.
+    Использует модель 'yandexgpt' с конфигурацией: температура 0.8 и max_tokens=200.
+    Результат — список альтернатив, который объединяется в итоговый ответ.
     """
     try:
-        logger.info("Отправка запроса в Yandex GPT")
-        request = TextGenerationRequest(
-            model="yandex-gpt",
-            prompt=prompt,
-            max_tokens=200
-        )
-        # Оборачиваем синхронный вызов в asyncio.to_thread
-        response = await asyncio.to_thread(gpt_client.GenerateText, request)
+        logger.info("Отправка запроса в Yandex GPT через AsyncYCloudML")
+        # Получаем объект модели completions для модели 'yandexgpt'
+        model = sdk.models.completions("yandexgpt")
+        # Конфигурируем модель: устанавливаем температуру 0.8 и максимальное число токенов (например, 200)
+        configured_model = model.configure(temperature=0.8, max_tokens=200)
+        # Выполняем запрос асинхронно и получаем список альтернатив
+        result = await configured_model.run(prompt)
+        # Обрабатываем результат как список альтернатив
+        response_text = "\n".join([alternative for alternative in result])
         logger.info("Получен ответ от Yandex GPT")
-        return response.text if response.text else "Ошибка: пустой ответ от Yandex GPT"
+        return response_text if response_text else "Ошибка: пустой ответ от Yandex GPT"
     except Exception as e:
         logger.error(f"Ошибка вызова Yandex GPT: {e}")
         return f"Ошибка вызова Yandex GPT: {e}"
@@ -390,12 +394,7 @@ async def error_handler(update: object, context: CallbackContext) -> None:
     logger.error(f"Ошибка при обработке обновления {update}: {context.error}")
 
 def main() -> None:
-    TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN не задан в переменных окружения.")
-        return
-
-    app = Application.builder().token(TOKEN).build()
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     # Обработчик для теста и общения с Yandex GPT
     test_conv_handler = ConversationHandler(
