@@ -1,24 +1,18 @@
 FROM python:3.10-slim
 
-# Отключаем запись .pyc и включаем небуферизированный вывод
+# Отключаем запись байткода и включаем небуферизированный вывод
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 # Устанавливаем рабочую директорию внутри контейнера
 WORKDIR /app
 
-# Создаем папку для хранения данных (DATA_DIR)
-RUN mkdir -p /app/data
+# При необходимости можно установить системные зависимости (например, gcc)
+# RUN apt-get update && apt-get install -y gcc
 
-# Установка зависимостей
+# Копируем файл зависимостей и устанавливаем их
 COPY requirements.txt .
-
-# Устанавливаем зависимости из requirements.txt
 RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
-
-# Установка yandex-cloud-ml-sdk (убираем дублирование, добавляем в requirements.txt)
-# Если не хочешь добавлять в requirements.txt, оставь так:
-# RUN pip install --no-cache-dir yandex-cloud-ml-sdk
 
 # Копируем весь исходный код проекта в контейнер
 COPY . .
