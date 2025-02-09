@@ -1,3 +1,5 @@
+version: "3.8"
+
 services:
   telegram-bot:
     build: .
@@ -14,7 +16,12 @@ services:
           cpus: "0.5"
           memory: "512M"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD-SHELL", "pgrep -f bot.py || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
+    logging:  # Добавляем логирование
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
