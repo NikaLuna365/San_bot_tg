@@ -119,9 +119,10 @@ def build_gemini_prompt_for_chat(user_message: str, test_answers: dict) -> str:
 async def call_gemini_api(prompt: str) -> dict:
     """
     Отправляет запрос к Gemini API с использованием официального SDK.
-    Если возникает ошибка, она логируется.
-    Для извлечения содержимого ответа сначала проверяется наличие атрибута 'content',
-    а если его нет — объект преобразуется в словарь с помощью vars().
+    Для платной версии используется модель "gemini-2.0-flash".
+    При извлечении ответа сначала проверяется наличие атрибута 'text', затем 'content'.
+    Если ни один не найден, объект преобразуется в словарь с помощью vars().
+    Дополнительно логируется полный словарь атрибутов объекта для отладки.
     """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -129,20 +130,24 @@ async def call_gemini_api(prompt: str) -> dict:
         return {"interpretation": "Ошибка: API ключ не задан."}
     try:
         configure(api_key=api_key)
-        # Используем модель gemini-2.0-flash-lite-preview-02-05
-        model = GenerativeModel("gemini-2.0-flash-lite-preview-02-05")
+        # Используем модель gemini-2.0-flash для платной версии
+        model = GenerativeModel("gemini-2.0-flash")
         logger.info(f"Отправка запроса к Gemini API с промптом:\n{prompt}")
         
-        # Выполнение вызова generate_content в отдельном потоке
         response = await asyncio.to_thread(model.generate_content, [prompt])
         
-        # Извлечение ответа:
-        if hasattr(response, "content"):
+        # Логирование полного словаря атрибутов объекта для отладки
+        logger.debug(f"Полный ответ от Gemini: {vars(response)}")
+        
+        # Попытка извлечения ответа через атрибут text, затем content
+        if hasattr(response, "text") and response.text:
+            interpretation = response.text
+        elif hasattr(response, "content") and response.content:
             interpretation = response.content
         else:
             response_dict = vars(response)
             interpretation = response_dict.get("content", "Нет ответа от Gemini.")
-        
+            
         logger.info(f"Ответ от Gemini: {interpretation}")
         return {"interpretation": interpretation}
     except Exception as e:
