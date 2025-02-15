@@ -10,7 +10,7 @@ from telegram.ext import (
     filters, CallbackContext
 )
 
-# Импорт официального SDK для Gemini от Google и его типов
+# Импорт SDK для Gemini от Google
 from google.generativeai import GenerativeModel, configure, types
 
 # ----------------------- Настройка логирования -----------------------
@@ -20,7 +20,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ----------------------- Глобальные переменные для вопросов -----------------------
+# ----------------------- Константы для вопросов -----------------------
 FIXED_QUESTIONS = [
     "1. Как вы оцениваете свое физическое состояние сейчас? (1 – очень плохое, 7 – отличное)",
     "2. Чувствуете ли вы себя бодрым/здоровым? (1 – ощущаю сильную усталость/болезнь, 7 – полностью бодрый и здоровый)",
@@ -34,7 +34,7 @@ OPEN_QUESTIONS = [
     "8. Что больше всего повлияло на ваше состояние сегодня?"
 ]
 
-# ----------------------- Основные настройки и директории -----------------------
+# ----------------------- Настройка директорий -----------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -50,7 +50,22 @@ AFTER_TEST_CHOICE, GEMINI_CHAT = range(10, 12)
 # Глобальный словарь для запланированных ретроспектив (user_id -> weekday, где 0 – понедельник, …, 6 – воскресенье)
 scheduled_retrospectives = {}
 
-# ----------------------- Вспомогательные функции для построения промптов -----------------------
+# ----------------------- Вспомогательные функции -----------------------
+
+def build_fixed_keyboard() -> ReplyKeyboardMarkup:
+    """
+    Возвращает клавиатуру с вариантами ответов от 1 до 7.
+    """
+    keyboard = [[str(i) for i in range(1, 8)]]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+async def start(update: Update, context: CallbackContext) -> None:
+    """
+    Функция для отображения главного меню.
+    """
+    keyboard = [["Тест", "Ретроспектива"], ["Помощь"]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+    await update.message.reply_text("Добро пожаловать! Выберите действие:", reply_markup=reply_markup)
 
 def build_gemini_prompt_for_test(test_answers: dict) -> str:
     """
@@ -110,8 +125,6 @@ def build_gemini_prompt_for_chat(user_message: str, test_answers: dict) -> str:
     prompt += "\nВопрос клиента: " + user_message + "\n"
     logger.info(f"Промпт для чата:\n{prompt}")
     return prompt
-
-# ----------------------- Функция вызова Gemini API -----------------------
 
 async def call_gemini_api(prompt: str) -> dict:
     """
@@ -215,7 +228,10 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
         "и они будут учитываться в контексте анализа вашего дня.\n"
         "Для выхода в главное меню нажмите кнопку «Главное меню»."
     )
-    await update.message.reply_text(message, reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
+    await update.message.reply_text(
+        message,
+        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
+    )
     return GEMINI_CHAT
 
 async def after_test_choice_handler(update: Update, context: CallbackContext) -> int:
@@ -246,7 +262,10 @@ async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
     prompt = build_gemini_prompt_for_chat(message, test_answers)
     gemini_response = await call_gemini_api(prompt)
     answer = gemini_response.get("interpretation", "Нет ответа от Gemini.")
-    await update.message.reply_text(answer, reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
+    await update.message.reply_text(
+        answer,
+        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
+    )
     return GEMINI_CHAT
 
 async def retrospective_start(update: Update, context: CallbackContext) -> int:
@@ -381,7 +400,10 @@ async def help_command(update: Update, context: CallbackContext) -> None:
         "Для выхода из режима общения введите «Главное меню».\n\n"
         "В справке также есть опция «Вернуться в главное меню»."
     )
-    await update.message.reply_text(help_text, reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
+    await update.message.reply_text(
+        help_text,
+        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
+    )
 
 async def error_handler(update: object, context: CallbackContext) -> None:
     logger.error(f"Ошибка при обработке обновления {update}: {context.error}")
