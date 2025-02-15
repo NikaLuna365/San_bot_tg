@@ -119,9 +119,9 @@ def build_gemini_prompt_for_chat(user_message: str, test_answers: dict) -> str:
 async def call_gemini_api(prompt: str) -> dict:
     """
     Отправляет запрос к Gemini API с использованием официального SDK.
-    Если возникает ошибка (например, неверный ключ или ошибка сервера), она логируется.
-    Теперь для извлечения содержимого ответа используется проверка наличия атрибута 'content',
-    а в противном случае — попытка преобразования объекта в словарь.
+    Если возникает ошибка, она логируется.
+    Для извлечения содержимого ответа сначала проверяется наличие атрибута 'content',
+    а если его нет — объект преобразуется в словарь с помощью vars().
     """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -129,21 +129,20 @@ async def call_gemini_api(prompt: str) -> dict:
         return {"interpretation": "Ошибка: API ключ не задан."}
     try:
         configure(api_key=api_key)
-        # Используем нужную модель (в данном случае gemini-1.5-flash, можно заменить на другую по необходимости)
-        model = GenerativeModel("gemini-1.5-flash")
+        # Используем модель gemini-2.0-flash-lite-preview-02-05
+        model = GenerativeModel("gemini-2.0-flash-lite-preview-02-05")
         logger.info(f"Отправка запроса к Gemini API с промптом:\n{prompt}")
         
-        # Вызов метода generate_content в отдельном потоке для избежания блокировки
+        # Выполнение вызова generate_content в отдельном потоке
         response = await asyncio.to_thread(model.generate_content, [prompt])
         
-        # Извлечение содержимого ответа
+        # Извлечение ответа:
         if hasattr(response, "content"):
             interpretation = response.content
         else:
-            # Если атрибут 'content' отсутствует, пробуем преобразовать объект в словарь
             response_dict = vars(response)
             interpretation = response_dict.get("content", "Нет ответа от Gemini.")
-            
+        
         logger.info(f"Ответ от Gemini: {interpretation}")
         return {"interpretation": interpretation}
     except Exception as e:
