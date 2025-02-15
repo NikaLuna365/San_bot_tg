@@ -50,111 +50,34 @@ OPEN_QUESTIONS = [
     "8. Что больше всего повлияло на ваше состояние сегодня?"
 ]
 
-# ----------------------- Функции формирования промптов для Gemini -----------------------
+# ----------------------- Обработчики -----------------------
 
-def build_gemini_prompt_for_test(test_answers: dict) -> str:
-    standard = (
-        "Вы профессиональный психолог с 10-летним стажем. "
-        "Ваш клиент прошёл психологический тест (ежедневный тест). "
-        "Проанализируйте его ответы и дайте развернутую интерпретацию его состояния, "
-        "используя научные термины и принципы когнитивной психологии. "
-        "Обратите внимание на открытые вопросы и, если необходимо, задайте уточняющие вопросы."
-    )
-    prompt = standard + "\n\n"
-    all_questions = FIXED_QUESTIONS + OPEN_QUESTIONS
-    for i, question in enumerate(all_questions, start=1):
-        key = f"fixed_{i}" if i <= 6 else f"open_{i-6}"
-        answer = test_answers.get(key, "не указано")
-        prompt += f"{i}. {question}\n   Ответ: {answer}\n"
-    prompt += "\nСформируй развернутый анализ состояния клиента."
-    logger.info(f"Промпт для теста:\n{prompt}")
-    return prompt
-
-def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
-    standard = (
-        "Вы профессиональный психолог с 10-летним стажем. "
-        "Ваш клиент прислал недельный тест. "
-        "Проанализируйте изменения в его состоянии за неделю, учитывая открытые ответы, "
-        "и дайте развернутую интерпретацию его эмоционального состояния с использованием научных терминов."
-    )
-    prompt = standard + "\n\n"
-    prompt += f"Количество тестов: {test_count}\n"
-    for category, avg in averages.items():
-        prompt += f"{category}: {avg}\n"
-    prompt += "\nСформируй подробный анализ с рекомендациями."
-    logger.info(f"Промпт для ретроспективы:\n{prompt}")
-    return prompt
-
-def build_gemini_prompt_for_chat(user_message: str, test_answers: dict) -> str:
-    standard = (
-        "Вы профессиональный психолог с 10-летним стажем. "
-        "Ваш клиент недавно прошёл психологический тест. Ниже приведены его ответы. "
-        "Проанализируйте их и ответьте на вопрос клиента, используя научные термины и принципы когнитивной психологии, "
-        "при необходимости задайте уточняющие вопросы."
-    )
-    prompt = standard + "\n\nРезультаты последнего теста:\n"
-    all_questions = FIXED_QUESTIONS + OPEN_QUESTIONS
-    for i, question in enumerate(all_questions, start=1):
-        key = f"fixed_{i}" if i <= 6 else f"open_{i-6}"
-        answer = test_answers.get(key, "не указано")
-        prompt += f"{i}. {question}\n   Ответ: {answer}\n"
-    prompt += "\nВопрос клиента: " + user_message + "\n"
-    logger.info(f"Промпт для чата с тестовыми результатами:\n{prompt}")
-    return prompt
-
-# ----------------------- Функция вызова Gemini API через официальный SDK -----------------------
-
-async def call_gemini_api(prompt: str) -> dict:
-    """
-    Отправляет запрос к Gemini API с использованием официального SDK.
-    Для платной версии используется модель "gemini-2.0-flash".
-    Генерация ответа ограничена 300 токенами через generation_config.
-    При извлечении ответа сначала проверяются атрибуты 'text' и 'content'.
-    """
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        logger.error("GEMINI_API_KEY не задан в переменных окружения.")
-        return {"interpretation": "Ошибка: API ключ не задан."}
-    try:
-        configure(api_key=api_key)
-        model = GenerativeModel("gemini-2.0-flash")
-        logger.info(f"Отправка запроса к Gemini API с промптом:\n{prompt}")
-        
-        # Ограничиваем вывод до 300 токенов
-        gen_config = types.GenerationConfig(
-            candidate_count=1,
-            max_output_tokens=300,
-            temperature=1.0
+async def after_test_choice_handler(update: Update, context: CallbackContext) -> int:
+    """Обработчик выбора после теста: переход в режим общения с Gemini или возврат в главное меню."""
+    choice = update.message.text.strip().lower()
+    if choice == "главное меню":
+        await update.message.reply_text("Возвращаемся в главное меню.", reply_markup=ReplyKeyboardRemove())
+        await start(update, context)
+        return ConversationHandler.END
+    elif choice == "пообщаться с gemini":
+        await update.message.reply_text(
+            "Теперь вы можете общаться с ИИ-психологом. Отправляйте свои сообщения, и они будут учитываться в контексте анализа вашего дня.\n"
+            "Для выхода в главное меню введите «Главное меню».",
+            reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
         )
-        
-        response = await asyncio.to_thread(
-            lambda: model.generate_content([prompt], generation_config=gen_config)
-        )
-        
-        logger.debug(f"Полный ответ от Gemini: {vars(response)}")
-        
-        if hasattr(response, "text") and response.text:
-            interpretation = response.text
-        elif hasattr(response, "content") and response.content:
-            interpretation = response.content
-        else:
-            response_dict = vars(response)
-            interpretation = response_dict.get("content", "Нет ответа от Gemini.")
-            
-        logger.info(f"Ответ от Gemini: {interpretation}")
-        return {"interpretation": interpretation}
-    except Exception as e:
-        logger.error(f"Ошибка при вызове Gemini API: {e}")
-        return {"interpretation": "Ошибка при обращении к Gemini API."}
-
-# ----------------------- Основное меню и обработчики команд -----------------------
+        return GEMINI_CHAT
+    else:
+        await update.message.reply_text("Пожалуйста, выберите: 'Главное меню' или 'Пообщаться с Gemini'.")
+        return AFTER_TEST_CHOICE
 
 async def start(update: Update, context: CallbackContext) -> None:
     keyboard = [["Тест", "Ретроспектива", "Помощь"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     await update.message.reply_text("Добро пожаловать! Выберите действие:", reply_markup=reply_markup)
 
-# ----------------------- Разговор для прохождения теста -----------------------
+def build_fixed_keyboard() -> ReplyKeyboardMarkup:
+    options = [str(i) for i in range(1, 8)]
+    return ReplyKeyboardMarkup([options], resize_keyboard=True, one_time_keyboard=True)
 
 async def test_start(update: Update, context: CallbackContext) -> int:
     context.user_data['test_answers'] = {}
@@ -162,10 +85,6 @@ async def test_start(update: Update, context: CallbackContext) -> int:
     context.user_data['question_index'] = 0
     await update.message.reply_text(FIXED_QUESTIONS[0], reply_markup=build_fixed_keyboard())
     return TEST_FIXED_1
-
-def build_fixed_keyboard() -> ReplyKeyboardMarkup:
-    options = [str(i) for i in range(1, 8)]
-    return ReplyKeyboardMarkup([options], resize_keyboard=True, one_time_keyboard=True)
 
 async def test_fixed_handler(update: Update, context: CallbackContext) -> int:
     index = context.user_data.get('question_index', 0)
@@ -193,7 +112,6 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
     answer = update.message.text.strip()
     context.user_data['test_answers']['open_2'] = answer
 
-    # Сохранение данных теста в JSON
     user_id = update.message.from_user.id
     test_start_time = context.user_data.get("test_start_time", datetime.now().strftime("%Y%m%d_%H%M%S"))
     filename = os.path.join(DATA_DIR, f"{user_id}_{test_start_time}.json")
@@ -215,13 +133,12 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
     prompt = build_gemini_prompt_for_test(context.user_data.get("test_answers", {}))
     gemini_response = await call_gemini_api(prompt)
     interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
-    
-    # Отправляем результат анализа и инструкцию для продолжения общения
+    # После анализа теста переходим в режим общения с ИИ-психологом
     message = (
         f"Результат анализа:\n{interpretation}\n\n"
-        "Теперь вы можете продолжить общение с ИИ-психологом – просто отправляйте сообщения, "
-        "и они будут обрабатываться в том же контексте, в котором был проанализирован ваш день.\n"
-        "Для выхода в главное меню введите «Главное меню»."
+        "Теперь вы можете общаться с ИИ-психологом. Отправляйте свои сообщения, "
+        "и они будут учитываться в контексте анализа вашего дня.\n"
+        "Для выхода в главное меню нажмите кнопку «Главное меню»."
     )
     await update.message.reply_text(message, reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
     return GEMINI_CHAT
@@ -229,8 +146,6 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
 async def test_cancel(update: Update, context: CallbackContext) -> int:
     await update.message.reply_text("Тест отменён.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
-
-# ----------------------- Обработчик общения с Gemini (режим ИИ-психолога) -----------------------
 
 async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
     message = update.message.text.strip()
@@ -244,8 +159,6 @@ async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
     answer = gemini_response.get("interpretation", "Нет ответа от Gemini.")
     await update.message.reply_text(answer, reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
     return GEMINI_CHAT
-
-# ----------------------- Разговор для ретроспективы -----------------------
 
 async def retrospective_start(update: Update, context: CallbackContext) -> int:
     keyboard = [["Ретроспектива сейчас", "Запланировать ретроспективу"]]
@@ -340,8 +253,6 @@ async def run_retrospective_now(update: Update, context: CallbackContext):
     interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
     await update.message.reply_text(f"Ретроспектива за последнюю неделю:\n{interpretation}")
 
-# ----------------------- Автоматический запуск запланированной ретроспективы (после теста) -----------------------
-
 async def check_and_run_scheduled_retrospective(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
     if user_id in scheduled_retrospectives:
@@ -368,8 +279,6 @@ async def check_and_run_scheduled_retrospective(update: Update, context: Callbac
             else:
                 await update.message.reply_text("Запланированная ретроспектива не выполнена: недостаточно данных (не менее 4 тестов за 7 дней).")
 
-# ----------------------- Команда "Помощь" -----------------------
-
 async def help_command(update: Update, context: CallbackContext) -> None:
     help_text = (
         "Наш бот предназначен для оценки вашего текущего состояния с помощью короткого теста.\n\n"
@@ -379,13 +288,11 @@ async def help_command(update: Update, context: CallbackContext) -> None:
         "   – Ретроспектива сейчас (если у вас минимум 4 теста за 7 дней),\n"
         "   – Запланировать ретроспективу (выберите день недели – отчет выполнится автоматически после нового теста в этот день).\n\n"
         "• Помощь – справочная информация.\n\n"
-        "После прохождения теста вы переходите в режим общения с ИИ-психологом, в котором ваши сообщения будут учитываться в контексте предыдущего анализа.\n"
+        "После прохождения теста вы переходите в режим общения с ИИ-психологом, где ваши сообщения учитываются в контексте предыдущего анализа.\n"
         "Для выхода из режима общения введите «Главное меню».\n\n"
-        "В разделе помощи вы также можете найти опцию «Вернуться в главное меню», если вам нужно выйти из справки."
+        "В справке также есть опция «Вернуться в главное меню»."
     )
     await update.message.reply_text(help_text, reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
-
-# ----------------------- Глобальный обработчик ошибок -----------------------
 
 async def error_handler(update: object, context: CallbackContext) -> None:
     logger.error(f"Ошибка при обработке обновления {update}: {context.error}")
@@ -400,7 +307,7 @@ def main() -> None:
 
     app = Application.builder().token(TOKEN).build()
 
-    # ConversationHandler для теста (с последующим выбором действий и режимом общения с Gemini)
+    # ConversationHandler для теста
     test_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Тест$"), test_start)],
         states={
