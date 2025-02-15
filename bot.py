@@ -20,17 +20,41 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ----------------------- Глобальные переменные для вопросов -----------------------
+FIXED_QUESTIONS = [
+    "1. Как вы оцениваете свое физическое состояние сейчас? (1 – очень плохое, 7 – отличное)",
+    "2. Чувствуете ли вы себя бодрым/здоровым? (1 – ощущаю сильную усталость/болезнь, 7 – полностью бодрый и здоровый)",
+    "3. Чувствуете ли вы себя энергичным? (1 – совсем нет сил, 7 – полон энергии)",
+    "4. Чувствуете ли вы усталость или необходимость отдохнуть? (1 – крайне утомлен, 7 – полностью отдохнувший)",
+    "5. Как вы оцениваете свое настроение сейчас? (1 – очень плохое, 7 – отличное)",
+    "6. Чувствуете ли вы себя позитивно или негативно настроенным? (1 – крайне негативно, 7 – исключительно позитивно)"
+]
+OPEN_QUESTIONS = [
+    "7. Какие три слова лучше всего описывают ваше текущее состояние?",
+    "8. Что больше всего повлияло на ваше состояние сегодня?"
+]
+
 # ----------------------- Основные настройки и директории -----------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# ----------------------- Определение вспомогательных функций -----------------------
+# ----------------------- Состояния для ConversationHandler -----------------------
+# Состояния прохождения теста (6 фиксированных вопросов + 2 открытых)
+TEST_FIXED_1, TEST_FIXED_2, TEST_FIXED_3, TEST_FIXED_4, TEST_FIXED_5, TEST_FIXED_6, TEST_OPEN_1, TEST_OPEN_2 = range(8)
+# Состояния для ретроспективы
+RETRO_CHOICE, RETRO_SCHEDULE_DAY = range(8, 10)
+# Состояния после теста: выбор дальнейших действий и режим общения с Gemini
+AFTER_TEST_CHOICE, GEMINI_CHAT = range(10, 12)
+
+# Глобальный словарь для запланированных ретроспектив (user_id -> weekday, где 0 – понедельник, …, 6 – воскресенье)
+scheduled_retrospectives = {}
+
+# ----------------------- Вспомогательные функции для построения промптов -----------------------
 
 def build_gemini_prompt_for_test(test_answers: dict) -> str:
     """
     Формирует промпт для анализа теста.
-    Используется стандартное вступление для ежедневного теста с подробным описанием ответов.
     """
     standard = (
         "Вы профессиональный психолог с 10-летним стажем. "
@@ -70,7 +94,6 @@ def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
 def build_gemini_prompt_for_chat(user_message: str, test_answers: dict) -> str:
     """
     Формирует промпт для режима общения с Gemini.
-    Включает стандартное вступление, результаты последнего теста и вопрос клиента.
     """
     standard = (
         "Вы профессиональный психолог с 10-летним стажем. "
@@ -85,15 +108,15 @@ def build_gemini_prompt_for_chat(user_message: str, test_answers: dict) -> str:
         answer = test_answers.get(key, "не указано")
         prompt += f"{i}. {question}\n   Ответ: {answer}\n"
     prompt += "\nВопрос клиента: " + user_message + "\n"
-    logger.info(f"Промпт для чата с тестовыми результатами:\n{prompt}")
+    logger.info(f"Промпт для чата:\n{prompt}")
     return prompt
+
+# ----------------------- Функция вызова Gemini API -----------------------
 
 async def call_gemini_api(prompt: str) -> dict:
     """
-    Отправляет запрос к Gemini API с использованием официального SDK.
-    Для платной версии используется модель "gemini-2.0-flash".
-    Генерация ответа ограничена 300 токенами через generation_config.
-    При извлечении ответа сначала проверяются атрибуты 'text' и 'content'.
+    Отправляет запрос к Gemini API.
+    Ограничивает вывод до 300 токенов через GenerationConfig.
     """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -109,11 +132,9 @@ async def call_gemini_api(prompt: str) -> dict:
             max_output_tokens=300,
             temperature=1.0
         )
-        
         response = await asyncio.to_thread(
             lambda: model.generate_content([prompt], generation_config=gen_config)
         )
-        
         logger.debug(f"Полный ответ от Gemini: {vars(response)}")
         
         if hasattr(response, "text") and response.text:
@@ -123,29 +144,13 @@ async def call_gemini_api(prompt: str) -> dict:
         else:
             response_dict = vars(response)
             interpretation = response_dict.get("content", "Нет ответа от Gemini.")
-            
         logger.info(f"Ответ от Gemini: {interpretation}")
         return {"interpretation": interpretation}
     except Exception as e:
         logger.error(f"Ошибка при вызове Gemini API: {e}")
         return {"interpretation": "Ошибка при обращении к Gemini API."}
 
-# ----------------------- Глобальные переменные для вопросов -----------------------
-# Обратите внимание: эти переменные должны быть определены до использования функций построения промптов.
-FIXED_QUESTIONS = [
-    "1. Как вы оцениваете свое физическое состояние сейчас? (1 – очень плохое, 7 – отличное)",
-    "2. Чувствуете ли вы себя бодрым/здоровым? (1 – ощущаю сильную усталость/болезнь, 7 – полностью бодрый и здоровый)",
-    "3. Чувствуете ли вы себя энергичным? (1 – совсем нет сил, 7 – полон энергии)",
-    "4. Чувствуете ли вы усталость или необходимость отдохнуть? (1 – крайне утомлен, 7 – полностью отдохнувший)",
-    "5. Как вы оцениваете свое настроение сейчас? (1 – очень плохое, 7 – отличное)",
-    "6. Чувствуете ли вы себя позитивно или негативно настроенным? (1 – крайне негативно, 7 – исключительно позитивно)"
-]
-OPEN_QUESTIONS = [
-    "7. Какие три слова лучше всего описывают ваше текущее состояние?",
-    "8. Что больше всего повлияло на ваше состояние сегодня?"
-]
-
-# ----------------------- Обработчики для теста и общения -----------------------
+# ----------------------- Обработчики команд и разговоров -----------------------
 
 async def test_cancel(update: Update, context: CallbackContext) -> int:
     await update.message.reply_text("Тест отменён.", reply_markup=ReplyKeyboardRemove())
@@ -201,7 +206,6 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
         return ConversationHandler.END
 
     context.user_data["last_test_answers"] = context.user_data.get("test_answers", {})
-
     prompt = build_gemini_prompt_for_test(context.user_data.get("test_answers", {}))
     gemini_response = await call_gemini_api(prompt)
     interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
@@ -215,7 +219,6 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
     return GEMINI_CHAT
 
 async def after_test_choice_handler(update: Update, context: CallbackContext) -> int:
-    """Обработчик выбора после теста (если используется дополнительный выбор)."""
     choice = update.message.text.strip().lower()
     if choice == "главное меню":
         await update.message.reply_text("Возвращаемся в главное меню.", reply_markup=ReplyKeyboardRemove())
@@ -223,7 +226,8 @@ async def after_test_choice_handler(update: Update, context: CallbackContext) ->
         return ConversationHandler.END
     elif choice == "пообщаться с gemini":
         await update.message.reply_text(
-            "Теперь вы можете общаться с ИИ-психологом. Отправляйте свои сообщения, и они будут учитываться в контексте анализа вашего дня.\n"
+            "Теперь вы можете общаться с ИИ-психологом. Отправляйте свои сообщения, "
+            "и они будут учитываться в контексте анализа вашего дня.\n"
             "Для выхода в главное меню нажмите кнопку «Главное меню».",
             reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
         )
