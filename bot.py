@@ -15,7 +15,7 @@ from google.generativeai import GenerativeModel, configure, types
 
 # ----------------------- Настройка логирования -----------------------
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", 
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
@@ -53,10 +53,6 @@ OPEN_QUESTIONS = [
 # ----------------------- Функции формирования промптов для Gemini -----------------------
 
 def build_gemini_prompt_for_test(test_answers: dict) -> str:
-    """
-    Формирует промпт для анализа теста.
-    Используется стандартное вступление для ежедневного теста с подробным описанием ответов.
-    """
     standard = (
         "Вы профессиональный психолог с 10-летним стажем. "
         "Ваш клиент прошёл психологический тест (ежедневный тест). "
@@ -75,9 +71,6 @@ def build_gemini_prompt_for_test(test_answers: dict) -> str:
     return prompt
 
 def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
-    """
-    Формирует промпт для ретроспективного анализа.
-    """
     standard = (
         "Вы профессиональный психолог с 10-летним стажем. "
         "Ваш клиент прислал недельный тест. "
@@ -93,10 +86,6 @@ def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
     return prompt
 
 def build_gemini_prompt_for_chat(user_message: str, test_answers: dict) -> str:
-    """
-    Формирует промпт для режима общения с Gemini.
-    Включает стандартное вступление, результаты последнего теста и вопрос клиента.
-    """
     standard = (
         "Вы профессиональный психолог с 10-летним стажем. "
         "Ваш клиент недавно прошёл психологический тест. Ниже приведены его ответы. "
@@ -119,7 +108,7 @@ async def call_gemini_api(prompt: str) -> dict:
     """
     Отправляет запрос к Gemini API с использованием официального SDK.
     Для платной версии используется модель "gemini-2.0-flash".
-    Генерация ответа ограничена 600 токенами с помощью generation_config.
+    Генерация ответа ограничена 300 токенами через generation_config.
     При извлечении ответа сначала проверяются атрибуты 'text' и 'content'.
     """
     api_key = os.getenv("GEMINI_API_KEY")
@@ -128,14 +117,13 @@ async def call_gemini_api(prompt: str) -> dict:
         return {"interpretation": "Ошибка: API ключ не задан."}
     try:
         configure(api_key=api_key)
-        # Используем модель gemini-2.0-flash для платной версии
         model = GenerativeModel("gemini-2.0-flash")
         logger.info(f"Отправка запроса к Gemini API с промптом:\n{prompt}")
         
-        # Ограничение вывода до 600 токенов
+        # Ограничиваем вывод до 300 токенов
         gen_config = types.GenerationConfig(
             candidate_count=1,
-            max_output_tokens=600,
+            max_output_tokens=300,
             temperature=1.0
         )
         
@@ -227,36 +215,22 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
     prompt = build_gemini_prompt_for_test(context.user_data.get("test_answers", {}))
     gemini_response = await call_gemini_api(prompt)
     interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
-    await update.message.reply_text(f"Результат анализа:\n{interpretation}", reply_markup=ReplyKeyboardRemove())
-
-    await check_and_run_scheduled_retrospective(update, context)
-
-    keyboard = [["Главное меню", "Пообщаться с Gemini"]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-    await update.message.reply_text("Выберите дальнейшее действие:", reply_markup=reply_markup)
-    return AFTER_TEST_CHOICE
+    
+    # Отправляем результат анализа и инструкцию для продолжения общения
+    message = (
+        f"Результат анализа:\n{interpretation}\n\n"
+        "Теперь вы можете продолжить общение с ИИ-психологом – просто отправляйте сообщения, "
+        "и они будут обрабатываться в том же контексте, в котором был проанализирован ваш день.\n"
+        "Для выхода в главное меню введите «Главное меню»."
+    )
+    await update.message.reply_text(message, reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
+    return GEMINI_CHAT
 
 async def test_cancel(update: Update, context: CallbackContext) -> int:
     await update.message.reply_text("Тест отменён.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
-# ----------------------- Обработчик выбора после теста -----------------------
-
-async def after_test_choice_handler(update: Update, context: CallbackContext) -> int:
-    choice = update.message.text.strip().lower()
-    if choice == "главное меню":
-        await update.message.reply_text("Возвращаемся в главное меню.", reply_markup=ReplyKeyboardRemove())
-        await start(update, context)
-        return ConversationHandler.END
-    elif choice == "пообщаться с gemini":
-        await update.message.reply_text(
-            "Введите сообщение для общения с Gemini. Для выхода в главное меню введите 'Главное меню'.",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return GEMINI_CHAT
-    else:
-        await update.message.reply_text("Пожалуйста, выберите: 'Главное меню' или 'Пообщаться с Gemini'.")
-        return AFTER_TEST_CHOICE
+# ----------------------- Обработчик общения с Gemini (режим ИИ-психолога) -----------------------
 
 async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
     message = update.message.text.strip()
@@ -268,7 +242,7 @@ async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
     prompt = build_gemini_prompt_for_chat(message, test_answers)
     gemini_response = await call_gemini_api(prompt)
     answer = gemini_response.get("interpretation", "Нет ответа от Gemini.")
-    await update.message.reply_text(answer)
+    await update.message.reply_text(answer, reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
     return GEMINI_CHAT
 
 # ----------------------- Разговор для ретроспективы -----------------------
@@ -405,11 +379,11 @@ async def help_command(update: Update, context: CallbackContext) -> None:
         "   – Ретроспектива сейчас (если у вас минимум 4 теста за 7 дней),\n"
         "   – Запланировать ретроспективу (выберите день недели – отчет выполнится автоматически после нового теста в этот день).\n\n"
         "• Помощь – справочная информация.\n\n"
-        "После теста вы можете перейти в режим общения с Gemini, где бот будет отвечать на ваши вопросы, учитывая результаты последнего теста.\n"
-        "Для выхода из режима общения введите 'Главное меню'.\n\n"
-        "По вопросам доработки и предложений обращайтесь: @Nik_Ly."
+        "После прохождения теста вы переходите в режим общения с ИИ-психологом, в котором ваши сообщения будут учитываться в контексте предыдущего анализа.\n"
+        "Для выхода из режима общения введите «Главное меню».\n\n"
+        "В разделе помощи вы также можете найти опцию «Вернуться в главное меню», если вам нужно выйти из справки."
     )
-    await update.message.reply_text(help_text, reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text(help_text, reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
 
 # ----------------------- Глобальный обработчик ошибок -----------------------
 
