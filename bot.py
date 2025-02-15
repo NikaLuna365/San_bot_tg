@@ -50,6 +50,18 @@ OPEN_QUESTIONS = [
     "8. Что больше всего повлияло на ваше состояние сегодня?"
 ]
 
+# ----------------------- Функция разбивки длинного сообщения -----------------------
+
+async def send_long_message(update: Update, text: str, reply_markup=None):
+    """
+    Отправляет текстовое сообщение, разбивая его на части, если оно превышает 4096 символов.
+    """
+    chunk_size = 4096
+    for i in range(0, len(text), chunk_size):
+        # На первой итерации отправляем с reply_markup, далее без него
+        markup = reply_markup if i == 0 else None
+        await update.message.reply_text(text[i:i+chunk_size], reply_markup=markup)
+
 # ----------------------- Функции формирования промптов для Gemini -----------------------
 
 def build_gemini_prompt_for_test(test_answers: dict) -> str:
@@ -224,7 +236,7 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
     prompt = build_gemini_prompt_for_test(context.user_data.get("test_answers", {}))
     gemini_response = await call_gemini_api(prompt)
     interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
-    await update.message.reply_text(f"Результат анализа:\n{interpretation}", reply_markup=ReplyKeyboardRemove())
+    await send_long_message(update, f"Результат анализа:\n{interpretation}", reply_markup=ReplyKeyboardRemove())
 
     # Если для пользователя запланирована ретроспектива и сегодня выбранный день – запускаем анализ
     await check_and_run_scheduled_retrospective(update, context)
@@ -268,7 +280,7 @@ async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
     prompt = build_gemini_prompt_for_chat(message, test_answers)
     gemini_response = await call_gemini_api(prompt)
     answer = gemini_response.get("interpretation", "Нет ответа от Gemini.")
-    await update.message.reply_text(answer)
+    await send_long_message(update, answer)
     return GEMINI_CHAT
 
 # ----------------------- Разговор для ретроспективы -----------------------
@@ -365,7 +377,7 @@ async def run_retrospective_now(update: Update, context: CallbackContext):
     prompt = build_gemini_prompt_for_retro(averages, len(tests))
     gemini_response = await call_gemini_api(prompt)
     interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
-    await update.message.reply_text(f"Ретроспектива за последнюю неделю:\n{interpretation}")
+    await send_long_message(update, f"Ретроспектива за последнюю неделю:\n{interpretation}")
 
 # ----------------------- Автоматический запуск запланированной ретроспективы (после теста) -----------------------
 
@@ -437,35 +449,4 @@ def main() -> None:
             TEST_FIXED_4: [MessageHandler(filters.TEXT & ~filters.COMMAND, test_fixed_handler)],
             TEST_FIXED_5: [MessageHandler(filters.TEXT & ~filters.COMMAND, test_fixed_handler)],
             TEST_FIXED_6: [MessageHandler(filters.TEXT & ~filters.COMMAND, test_fixed_handler)],
-            TEST_OPEN_1:  [MessageHandler(filters.TEXT & ~filters.COMMAND, test_open_1)],
-            TEST_OPEN_2:  [MessageHandler(filters.TEXT & ~filters.COMMAND, test_open_2)],
-            AFTER_TEST_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, after_test_choice_handler)],
-            GEMINI_CHAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gemini_chat_handler)]
-        },
-        fallbacks=[CommandHandler("cancel", test_cancel)],
-        allow_reentry=True
-    )
-    app.add_handler(test_conv_handler)
-
-    # ConversationHandler для ретроспективы
-    retro_conv_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^Ретроспектива$"), retrospective_start)],
-        states={
-            RETRO_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, retrospective_choice_handler)],
-            RETRO_SCHEDULE_DAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, retrospective_schedule_day)]
-        },
-        fallbacks=[CommandHandler("cancel", test_cancel)],
-        allow_reentry=True
-    )
-    app.add_handler(retro_conv_handler)
-
-    # Команды /start и /help, а также обработка кнопки "Помощь"
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(MessageHandler(filters.Regex("^Помощь$"), help_command))
-
-    app.add_error_handler(error_handler)
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+            TEST_OPEN_1:  [MessageHandler(filters.TEXT & ~filters.COMMAND, test_open_
