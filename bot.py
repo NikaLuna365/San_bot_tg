@@ -128,6 +128,7 @@ def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
 async def call_gemini_api(prompt: str) -> dict:
     """
     Отправляет запрос к Gemini API с ограничением вывода до 300 токенов.
+    Параметр temperature установлен на 0.4 для получения кратких и детерминированных ответов.
     """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -141,7 +142,7 @@ async def call_gemini_api(prompt: str) -> dict:
         gen_config = types.GenerationConfig(
             candidate_count=1,
             max_output_tokens=300,
-            temperature=1.0
+            temperature=0.4  # снижено с 1.0 до 0.4
         )
         response = await asyncio.to_thread(
             lambda: model.generate_content([prompt], generation_config=gen_config)
