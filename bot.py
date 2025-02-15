@@ -10,8 +10,8 @@ from telegram.ext import (
     filters, CallbackContext
 )
 
-# Импорт официального SDK для Gemini от Google
-from google.generativeai import GenerativeModel, configure
+# Импорт официального SDK для Gemini от Google и его типов
+from google.generativeai import GenerativeModel, configure, types
 
 # ----------------------- Настройка логирования -----------------------
 logging.basicConfig(
@@ -50,20 +50,13 @@ OPEN_QUESTIONS = [
     "8. Что больше всего повлияло на ваше состояние сегодня?"
 ]
 
-# ----------------------- Вспомогательная функция для отправки длинных сообщений -----------------------
-
-async def send_long_message(update: Update, context: CallbackContext, text: str, reply_markup=None):
-    MAX_LENGTH = 4096  # Максимальная длина сообщения для Telegram
-    if len(text) <= MAX_LENGTH:
-        await update.message.reply_text(text, reply_markup=reply_markup)
-    else:
-        parts = [text[i:i+MAX_LENGTH] for i in range(0, len(text), MAX_LENGTH)]
-        for part in parts:
-            await update.message.reply_text(part, reply_markup=reply_markup)
-
 # ----------------------- Функции формирования промптов для Gemini -----------------------
 
 def build_gemini_prompt_for_test(test_answers: dict) -> str:
+    """
+    Формирует промпт для анализа теста.
+    Используется стандартное вступление для ежедневного теста с подробным описанием ответов.
+    """
     standard = (
         "Вы профессиональный психолог с 10-летним стажем. "
         "Ваш клиент прошёл психологический тест (ежедневный тест). "
@@ -82,6 +75,9 @@ def build_gemini_prompt_for_test(test_answers: dict) -> str:
     return prompt
 
 def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
+    """
+    Формирует промпт для ретроспективного анализа.
+    """
     standard = (
         "Вы профессиональный психолог с 10-летним стажем. "
         "Ваш клиент прислал недельный тест. "
@@ -97,6 +93,10 @@ def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
     return prompt
 
 def build_gemini_prompt_for_chat(user_message: str, test_answers: dict) -> str:
+    """
+    Формирует промпт для режима общения с Gemini.
+    Включает стандартное вступление, результаты последнего теста и вопрос клиента.
+    """
     standard = (
         "Вы профессиональный психолог с 10-летним стажем. "
         "Ваш клиент недавно прошёл психологический тест. Ниже приведены его ответы. "
@@ -116,6 +116,12 @@ def build_gemini_prompt_for_chat(user_message: str, test_answers: dict) -> str:
 # ----------------------- Функция вызова Gemini API через официальный SDK -----------------------
 
 async def call_gemini_api(prompt: str) -> dict:
+    """
+    Отправляет запрос к Gemini API с использованием официального SDK.
+    Для платной версии используется модель "gemini-2.0-flash".
+    Генерация ответа ограничена 600 токенами с помощью generation_config.
+    При извлечении ответа сначала проверяются атрибуты 'text' и 'content'.
+    """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         logger.error("GEMINI_API_KEY не задан в переменных окружения.")
@@ -126,7 +132,16 @@ async def call_gemini_api(prompt: str) -> dict:
         model = GenerativeModel("gemini-2.0-flash")
         logger.info(f"Отправка запроса к Gemini API с промптом:\n{prompt}")
         
-        response = await asyncio.to_thread(model.generate_content, [prompt])
+        # Ограничение вывода до 600 токенов
+        gen_config = types.GenerationConfig(
+            candidate_count=1,
+            max_output_tokens=600,
+            temperature=1.0
+        )
+        
+        response = await asyncio.to_thread(
+            lambda: model.generate_content([prompt], generation_config=gen_config)
+        )
         
         logger.debug(f"Полный ответ от Gemini: {vars(response)}")
         
@@ -190,6 +205,7 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
     answer = update.message.text.strip()
     context.user_data['test_answers']['open_2'] = answer
 
+    # Сохранение данных теста в JSON
     user_id = update.message.from_user.id
     test_start_time = context.user_data.get("test_start_time", datetime.now().strftime("%Y%m%d_%H%M%S"))
     filename = os.path.join(DATA_DIR, f"{user_id}_{test_start_time}.json")
@@ -211,7 +227,7 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
     prompt = build_gemini_prompt_for_test(context.user_data.get("test_answers", {}))
     gemini_response = await call_gemini_api(prompt)
     interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
-    await send_long_message(update, context, f"Результат анализа:\n{interpretation}", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text(f"Результат анализа:\n{interpretation}", reply_markup=ReplyKeyboardRemove())
 
     await check_and_run_scheduled_retrospective(update, context)
 
@@ -252,7 +268,7 @@ async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
     prompt = build_gemini_prompt_for_chat(message, test_answers)
     gemini_response = await call_gemini_api(prompt)
     answer = gemini_response.get("interpretation", "Нет ответа от Gemini.")
-    await send_long_message(update, context, answer)
+    await update.message.reply_text(answer)
     return GEMINI_CHAT
 
 # ----------------------- Разговор для ретроспективы -----------------------
@@ -348,7 +364,7 @@ async def run_retrospective_now(update: Update, context: CallbackContext):
     prompt = build_gemini_prompt_for_retro(averages, len(tests))
     gemini_response = await call_gemini_api(prompt)
     interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
-    await send_long_message(update, context, f"Ретроспектива за последнюю неделю:\n{interpretation}")
+    await update.message.reply_text(f"Ретроспектива за последнюю неделю:\n{interpretation}")
 
 # ----------------------- Автоматический запуск запланированной ретроспективы (после теста) -----------------------
 
