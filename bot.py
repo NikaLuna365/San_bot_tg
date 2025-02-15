@@ -120,6 +120,8 @@ async def call_gemini_api(prompt: str) -> dict:
     """
     Отправляет запрос к Gemini API с использованием официального SDK.
     Если возникает ошибка (например, неверный ключ или ошибка сервера), она логируется.
+    Теперь для извлечения содержимого ответа используется проверка наличия атрибута 'content',
+    а в противном случае — попытка преобразования объекта в словарь.
     """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -127,11 +129,21 @@ async def call_gemini_api(prompt: str) -> dict:
         return {"interpretation": "Ошибка: API ключ не задан."}
     try:
         configure(api_key=api_key)
+        # Используем нужную модель (в данном случае gemini-1.5-flash, можно заменить на другую по необходимости)
         model = GenerativeModel("gemini-1.5-flash")
         logger.info(f"Отправка запроса к Gemini API с промптом:\n{prompt}")
-        # Обратите внимание: теперь передаём список с одним промптом
+        
+        # Вызов метода generate_content в отдельном потоке для избежания блокировки
         response = await asyncio.to_thread(model.generate_content, [prompt])
-        interpretation = response.get("content", "Нет ответа от Gemini.")
+        
+        # Извлечение содержимого ответа
+        if hasattr(response, "content"):
+            interpretation = response.content
+        else:
+            # Если атрибут 'content' отсутствует, пробуем преобразовать объект в словарь
+            response_dict = vars(response)
+            interpretation = response_dict.get("content", "Нет ответа от Gemini.")
+            
         logger.info(f"Ответ от Gemini: {interpretation}")
         return {"interpretation": interpretation}
     except Exception as e:
