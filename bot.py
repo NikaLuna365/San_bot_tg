@@ -94,12 +94,24 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
+# Папка для напоминаний (на английском)
+REMINDER_DIR = os.path.join(BASE_DIR, "reminder")
+os.makedirs(REMINDER_DIR, exist_ok=True)
+# Даем права на запись
+os.chmod(REMINDER_DIR, 0o777)
+
 # ----------------------- Состояния для ConversationHandler -----------------------
+# Состояния для теста (фиксированные и открытые вопросы)
 TEST_FIXED_1, TEST_FIXED_2, TEST_FIXED_3, TEST_FIXED_4, TEST_FIXED_5, TEST_FIXED_6, TEST_OPEN_1, TEST_OPEN_2 = range(8)
+# Состояния для ретроспективы
 RETRO_CHOICE, RETRO_SCHEDULE_DAY = range(8, 10)
 RETRO_CHAT = 10
+# Состояния для общения после теста
 AFTER_TEST_CHOICE, GEMINI_CHAT = range(11, 13)
+# Состояния для раздела "Напоминание" (начинаем с 100)
+REMINDER_CHOICE, REMINDER_DAILY_TIME, REMINDER_DAILY_REMIND = range(100, 103)
 
+# Глобальный словарь для запланированных ретроспектив (user_id -> weekday)
 scheduled_retrospectives = {}
 
 # ----------------------- Вспомогательные функции -----------------------
@@ -113,8 +125,9 @@ async def exit_to_main(update: Update, context: CallbackContext) -> int:
     await start(update, context)
     return ConversationHandler.END
 
+# Главное меню с кнопками: Тест, Ретроспектива, Напоминание, Помощь
 async def start(update: Update, context: CallbackContext) -> None:
-    keyboard = [["Тест", "Ретроспектива"], ["Помощь"]]
+    keyboard = [["Тест", "Ретроспектива"], ["Напоминание", "Помощь"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     await update.message.reply_text("Добро пожаловать! Выберите действие:", reply_markup=reply_markup)
 
@@ -123,20 +136,27 @@ def remaining_days_in_month() -> int:
     _, last_day = monthrange(today.year, today.month)
     return last_day - today.day
 
+# Функция сохранения напоминания: записывает id пользователя и время напоминания
+def save_reminder(user_id: int, reminder_time: str):
+    reminder_file = os.path.join(REMINDER_DIR, "reminders.txt")
+    with open(reminder_file, "a", encoding="utf-8") as f:
+        f.write(f"{user_id}: {reminder_time}\n")
+
+# ----------------------- Функции формирования промптов для Gemini -----------------------
+
 def build_gemini_prompt_for_test(fixed_questions: list, test_answers: dict) -> str:
     """
     Формирует промпт для анализа результатов теста.
     Инструкция: Клиент прошёл ежедневный опрос, состоящий из фиксированных вопросов по 7-балльной шкале и 2 открытых вопросов.
     Фиксированные вопросы оцениваются так, что 1 означает крайне негативное состояние, а 7 – исключительно позитивное.
-    Каждая шкала состоит из 2 вопросов (итоговый балл = сумма двух оценок, диапазон 2–14, где 2–5 – низкий уровень, 6–10 – средний, 11–14 – высокий).
+    Каждая шкала состоит из 2 вопросов (итоговый балл = сумма двух оценок, диапазон 2–14, где 2–5 – низкий, 6–10 – средний, 11–14 – высокий).
     Пожалуйста, выполните все вычисления итоговых баллов в уме без вывода промежуточных данных.
-    Затем сформируйте один абзац общего анализа итоговых баллов и динамики состояния клиента,
-    а после сразу кратко опишите анализ открытых вопросов.
+    Сформируйте один абзац общего анализа итоговых баллов и динамики состояния клиента, а затем сразу кратко опишите анализ открытых вопросов.
     Запрещается использование символа "*" для форматирования результатов.
     """
     prompt = ("Вы профессиональный психолог с 10-летним стажем. Клиент прошёл ежедневный опрос.\n"
               "Фиксированные вопросы оцениваются по 7-балльной шкале, где 1 – крайне негативное состояние, а 7 – исключительно позитивное состояние.\n"
-              "Каждая шкала состоит из 2 вопросов (итоговый балл = сумма двух оценок, диапазон 2–14: 2–5 – низкий уровень, 6–10 – средний, 11–14 – высокий).\n"
+              "Каждая шкала состоит из 2 вопросов (итоговый балл = сумма двух оценок, диапазон 2–14: 2–5 – низкий, 6–10 – средний, 11–14 – высокий).\n"
               "Пожалуйста, выполните все вычисления итоговых баллов в уме без вывода промежуточных данных. "
               "Сформируйте один абзац общего анализа итоговых баллов и динамики состояния клиента, а затем сразу кратко опишите анализ открытых вопросов.\n"
               "Запрещается использование символа \"*\" для форматирования результатов.\n\n")
@@ -184,7 +204,7 @@ def build_gemini_prompt_for_retro_chat(user_message: str, week_overview: str) ->
     logger.info(f"Промпт для обсуждения недели:\n{prompt}")
     return prompt
 
-async def call_gemini_api(prompt: str, max_tokens: int = 300) -> dict:
+async def call_gemini_api(prompt: str, max_tokens: int = 150) -> dict:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         logger.error("GEMINI_API_KEY не задан в переменных окружения.")
@@ -216,7 +236,7 @@ async def call_gemini_api(prompt: str, max_tokens: int = 300) -> dict:
         logger.error(f"Ошибка при вызове Gemini API: {e}")
         return {"interpretation": "Ошибка при обращении к Gemini API."}
 
-# ----------------------- Обработчики команд и разговоров -----------------------
+# ----------------------- Обработчики теста -----------------------
 
 async def test_cancel(update: Update, context: CallbackContext) -> int:
     await update.message.reply_text("Тест отменён.", reply_markup=ReplyKeyboardRemove())
@@ -311,7 +331,7 @@ async def after_test_choice_handler(update: Update, context: CallbackContext) ->
     choice = update.message.text.strip().lower()
     if choice == "главное меню":
         return await exit_to_main(update, context)
-    elif choice == "пообщаться с ИИ-психологом":
+    elif choice == "пообщаться с gemini":
         await update.message.reply_text(
             "Теперь вы можете общаться с ИИ-психологом. Отправляйте свои сообщения, "
             "и они будут учитываться в контексте анализа вашего дня.\n"
@@ -320,7 +340,7 @@ async def after_test_choice_handler(update: Update, context: CallbackContext) ->
         )
         return GEMINI_CHAT
     else:
-        await update.message.reply_text("Пожалуйста, выберите: 'Главное меню' или 'Пообщаться с ИИ-психологом'.")
+        await update.message.reply_text("Пожалуйста, выберите: 'Главное меню' или 'Пообщаться с Gemini'.")
         return AFTER_TEST_CHOICE
 
 async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
@@ -337,6 +357,8 @@ async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
         reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
     )
     return GEMINI_CHAT
+
+# ----------------------- Обработчики ретроспективы -----------------------
 
 async def retrospective_start(update: Update, context: CallbackContext) -> int:
     keyboard = [["Ретроспектива сейчас", "Запланировать ретроспективу", "Главное меню"]]
@@ -457,12 +479,47 @@ async def retrospective_chat_handler(update: Update, context: CallbackContext) -
     )
     return RETRO_CHAT
 
+# ----------------------- Обработчики раздела "Напоминание" -----------------------
+
+async def reminder_start(update: Update, context: CallbackContext) -> int:
+    keyboard = [["Ежедневный тест", "Ретроспектива"], ["Главное меню"]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+    await update.message.reply_text("Выберите тип напоминания:", reply_markup=reply_markup)
+    return REMINDER_CHOICE
+
+async def reminder_daily_test(update: Update, context: CallbackContext) -> int:
+    user_choice = update.message.text.strip().lower()
+    if user_choice == "ежедневный тест":
+        await update.message.reply_text("Сколько у вас сейчас времени? (например, 15:30)")
+        return REMINDER_DAILY_TIME
+    elif user_choice == "ретроспектива":
+        await update.message.reply_text("Функция ретроспективы в разработке.")
+        return ConversationHandler.END
+    else:
+        return await exit_to_main(update, context)
+
+async def reminder_receive_current_time(update: Update, context: CallbackContext) -> int:
+    current_time = update.message.text.strip()
+    context.user_data["current_time"] = current_time
+    await update.message.reply_text("Во сколько напоминать о ежедневном тесте? (например, 08:00)")
+    return REMINDER_DAILY_REMIND
+
+async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
+    reminder_time = update.message.text.strip()
+    user_id = update.message.from_user.id
+    save_reminder(user_id, reminder_time)
+    await update.message.reply_text("Напоминание установлено!", reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
+    return ConversationHandler.END
+
+# ----------------------- Дополнительные команды -----------------------
+
 async def help_command(update: Update, context: CallbackContext) -> None:
     help_text = (
         "Наш бот предназначен для оценки вашего состояния с помощью короткого теста.\n\n"
         "Команды:\n"
         "• Тест – пройти тест (фиксированные вопросы, зависящие от дня недели, и 2 открытых вопроса).\n"
         "• Ретроспектива – анализ изменений за последнюю неделю и обсуждение итогов.\n"
+        "• Напоминание – установить напоминание для прохождения теста.\n"
         "• Помощь – справочная информация.\n\n"
         "Во всех этапах работы доступна кнопка «Главное меню» для возврата в стартовое меню."
     )
@@ -474,12 +531,17 @@ async def help_command(update: Update, context: CallbackContext) -> None:
 async def error_handler(update: object, context: CallbackContext) -> None:
     logger.error(f"Ошибка при обработке обновления {update}: {context.error}")
 
+# ----------------------- Основная функция -----------------------
+
 def main() -> None:
     TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     if not TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN не задан в переменных окружения.")
         return
+
     app = Application.builder().token(TOKEN).build()
+
+    # ConversationHandler для теста
     test_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Тест$"), test_start)],
         states={
@@ -498,6 +560,8 @@ def main() -> None:
         allow_reentry=True
     )
     app.add_handler(test_conv_handler)
+
+    # ConversationHandler для ретроспективы
     retro_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Ретроспектива$"), retrospective_start)],
         states={
@@ -509,6 +573,20 @@ def main() -> None:
         allow_reentry=True
     )
     app.add_handler(retro_conv_handler)
+
+    # ConversationHandler для раздела "Напоминание"
+    reminder_conv_handler = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^Напоминание$"), reminder_start)],
+        states={
+            REMINDER_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_daily_test)],
+            REMINDER_DAILY_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_receive_current_time)],
+            REMINDER_DAILY_REMIND: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_set_daily)]
+        },
+        fallbacks=[MessageHandler(filters.Regex("^Главное меню$"), exit_to_main)],
+        allow_reentry=True
+    )
+    app.add_handler(reminder_conv_handler)
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(MessageHandler(filters.Regex("^Помощь$"), help_command))
