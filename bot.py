@@ -186,7 +186,7 @@ def build_gemini_prompt_for_retro_chat(user_message: str, week_overview: str) ->
     logger.info(f"Промпт для обсуждения недели:\n{prompt}")
     return prompt
 
-async def call_gemini_api(prompt: str, max_tokens: int = 150) -> dict:
+async def call_gemini_api(prompt: str, max_tokens: int = 300) -> dict:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         logger.error("GEMINI_API_KEY не задан в переменных окружения.")
@@ -451,7 +451,7 @@ async def retrospective_chat_handler(update: Update, context: CallbackContext) -
         return await exit_to_main(update, context)
     week_overview = context.user_data.get("week_overview", "")
     prompt = build_gemini_prompt_for_retro_chat(user_input, week_overview)
-    gemini_response = await call_gemini_api(prompt, max_tokens=150)
+    gemini_response = await call_gemini_api(prompt, max_tokens=300)
     answer = gemini_response.get("interpretation", "Нет ответа от Gemini.")
     await update.message.reply_text(
         answer,
