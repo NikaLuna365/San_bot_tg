@@ -121,6 +121,7 @@ def build_fixed_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
 async def exit_to_main(update: Update, context: CallbackContext) -> int:
+    context.user_data.clear()
     await update.message.reply_text("Возвращаемся в главное меню.", reply_markup=ReplyKeyboardRemove())
     await start(update, context)
     return ConversationHandler.END
@@ -317,8 +318,8 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
         message,
         reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
     )
-    if user_id in scheduled_retrospectives:
-        scheduled_day = scheduled_retrospectives[user_id]
+    if update.message.from_user.id in scheduled_retrospectives:
+        scheduled_day = scheduled_retrospectives[update.message.from_user.id]
         today = datetime.now()
         current_week = today.isocalendar()[1]
         last_retro_week = context.user_data.get("last_retrospective_week")
@@ -556,7 +557,10 @@ def main() -> None:
             AFTER_TEST_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, after_test_choice_handler)],
             GEMINI_CHAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gemini_chat_handler)]
         },
-        fallbacks=[CommandHandler("cancel", test_cancel), MessageHandler(filters.Regex("^Главное меню$"), exit_to_main)],
+        fallbacks=[
+            CommandHandler("cancel", test_cancel),
+            MessageHandler(filters.Regex("^(?i)главное меню$"), exit_to_main)
+        ],
         allow_reentry=True
     )
     app.add_handler(test_conv_handler)
@@ -569,7 +573,10 @@ def main() -> None:
             RETRO_SCHEDULE_DAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, retrospective_schedule_day)],
             RETRO_CHAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, retrospective_chat_handler)]
         },
-        fallbacks=[CommandHandler("cancel", test_cancel), MessageHandler(filters.Regex("^Главное меню$"), exit_to_main)],
+        fallbacks=[
+            CommandHandler("cancel", test_cancel),
+            MessageHandler(filters.Regex("^(?i)главное меню$"), exit_to_main)
+        ],
         allow_reentry=True
     )
     app.add_handler(retro_conv_handler)
@@ -582,7 +589,9 @@ def main() -> None:
             REMINDER_DAILY_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_receive_current_time)],
             REMINDER_DAILY_REMIND: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_set_daily)]
         },
-        fallbacks=[MessageHandler(filters.Regex("^Главное меню$"), exit_to_main)],
+        fallbacks=[
+            MessageHandler(filters.Regex("^(?i)главное меню$"), exit_to_main)
+        ],
         allow_reentry=True
     )
     app.add_handler(reminder_conv_handler)
