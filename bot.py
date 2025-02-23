@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import asyncio
+from calendar import monthrange
 from datetime import datetime, timedelta
 
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
@@ -55,13 +56,24 @@ scheduled_retrospectives = {}
 # ----------------------- Вспомогательные функции -----------------------
 
 def build_fixed_keyboard() -> ReplyKeyboardMarkup:
-    keyboard = [[str(i) for i in range(1, 8)]]
+    keyboard = [[str(i) for i in range(1, 8)], ["Главное меню"]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+async def exit_to_main(update: Update, context: CallbackContext) -> int:
+    await update.message.reply_text("Возвращаемся в главное меню.", reply_markup=ReplyKeyboardRemove())
+    await start(update, context)
+    return ConversationHandler.END
 
 async def start(update: Update, context: CallbackContext) -> None:
     keyboard = [["Тест", "Ретроспектива"], ["Помощь"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     await update.message.reply_text("Добро пожаловать! Выберите действие:", reply_markup=reply_markup)
+
+def remaining_days_in_month() -> int:
+    """Возвращает количество дней, оставшихся до конца текущего месяца."""
+    today = datetime.now()
+    _, last_day = monthrange(today.year, today.month)
+    return last_day - today.day
 
 def build_gemini_prompt_for_test(test_answers: dict) -> str:
     """
@@ -109,18 +121,18 @@ def build_gemini_prompt_for_followup_chat(user_message: str, test_answers: dict)
 def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
     """
     Формирует промпт для ретроспективного анализа.
-    Инструкция: Клиент проходил опросы каждый день. Проанализируй динамику за прошедшую неделю и дай краткий общий обзор итогов недели,
-    не вдаваясь в подробности.
+    Инструкция: Проведи краткий обзор ключевых событий, произошедших за прошедшую неделю, 
+    а также кратко освети динамику состояния клиента за эту неделю. Ответ не должен превышать 120 слов.
     """
     standard = (
-        "Вы профессиональный психолог с 10-летним стажем. Клиент проходил опросы каждый день, и ниже приведены его результаты за прошедшую неделю. "
-        "Проанализируй динамику изменений и дай краткий общий обзор итогов недели, не вдаваясь в подробности."
+        "Вы профессиональный психолог с 10-летним стажем. Клиент проходил опросы каждый день. "
+        "Пожалуйста, проведите краткий обзор ключевых событий, произошедших за прошедшую неделю, "
+        "а также кратко осветите динамику состояния клиента за эту неделю. Ответ не должен превышать 120 слов."
     )
     prompt = standard + "\n\n"
     prompt += f"Количество тестов: {test_count}\n"
     for category, avg in averages.items():
         prompt += f"{category}: {avg}\n"
-    prompt += "\nСформируй краткий общий обзор итогов недели (не более 120 слов)."
     logger.info(f"Промпт для ретроспективы:\n{prompt}")
     return prompt
 
@@ -129,14 +141,13 @@ def build_gemini_prompt_for_retro_chat(user_message: str, week_overview: str) ->
     Формирует промпт для обсуждения итогов недели.
     Инструкция: Используй ранее полученный общий обзор итогов недели (не повторяя его) как контекст.
     Ответ должен быть конкретным и кратким (не более 120 слов) и содержать рекомендации по заданному вопросу.
-    В конце ответа строго предложи обсудить итоги недели.
-    Запрещено повторять общий обзор.
+    В конце ответа строго предложи обсудить итоги недели. Запрещено повторять общий обзор.
     """
     standard = (
         "Вы профессиональный психолог с 10-летним стажем. Ниже приведен общий обзор итогов недели, полученный ранее. "
-        "Не повторяй этот обзор, а используй его как контекст для ответа на следующий вопрос клиента. "
+        "Не повторяйте этот обзор, а используйте его как контекст для ответа на следующий вопрос клиента. "
         "Ответ должен быть конкретным, кратким (не более 120 слов) и содержать рекомендации по заданному вопросу. "
-        "В конце ответа строго предложи обсудить итоги недели. "
+        "В конце ответа строго предложите обсудить итоги недели. "
         "Запрещено использовать символы форматирования."
     )
     prompt = standard + "\n\nОбзор итогов недели: " + week_overview + "\n\nВопрос клиента: " + user_message + "\n"
@@ -148,7 +159,7 @@ async def call_gemini_api(prompt: str, max_tokens: int = 150) -> dict:
     Отправляет запрос к Gemini API.
     Параметры генерации:
       - candidate_count: 1
-      - max_output_tokens: задается через параметр max_tokens (150 по умолчанию, 500 для ретроспективы)
+      - max_output_tokens: задается через параметр max_tokens (150 по умолчанию)
       - temperature: 0.4 (низкая для детерминированного ответа)
       - top_p: 1.0, top_k: 40
     """
@@ -199,8 +210,11 @@ async def test_start(update: Update, context: CallbackContext) -> int:
     return TEST_FIXED_1
 
 async def test_fixed_handler(update: Update, context: CallbackContext) -> int:
+    user_input = update.message.text.strip()
+    if user_input.lower() == "главное меню":
+        return await exit_to_main(update, context)
     index = context.user_data.get('question_index', 0)
-    answer = update.message.text.strip()
+    answer = user_input
     if answer not in [str(i) for i in range(1, 8)]:
         await update.message.reply_text("Пожалуйста, выберите вариант от 1 до 7.", reply_markup=build_fixed_keyboard())
         return TEST_FIXED_1 + index
@@ -211,18 +225,22 @@ async def test_fixed_handler(update: Update, context: CallbackContext) -> int:
         await update.message.reply_text(FIXED_QUESTIONS[index], reply_markup=build_fixed_keyboard())
         return TEST_FIXED_1 + index
     else:
-        await update.message.reply_text(OPEN_QUESTIONS[0], reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text(OPEN_QUESTIONS[0], reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
         return TEST_OPEN_1
 
 async def test_open_1(update: Update, context: CallbackContext) -> int:
-    answer = update.message.text.strip()
-    context.user_data['test_answers']['open_1'] = answer
-    await update.message.reply_text(OPEN_QUESTIONS[1])
+    user_input = update.message.text.strip()
+    if user_input.lower() == "главное меню":
+        return await exit_to_main(update, context)
+    context.user_data['test_answers']['open_1'] = user_input
+    await update.message.reply_text(OPEN_QUESTIONS[1], reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
     return TEST_OPEN_2
 
 async def test_open_2(update: Update, context: CallbackContext) -> int:
-    answer = update.message.text.strip()
-    context.user_data['test_answers']['open_2'] = answer
+    user_input = update.message.text.strip()
+    if user_input.lower() == "главное меню":
+        return await exit_to_main(update, context)
+    context.user_data['test_answers']['open_2'] = user_input
 
     user_id = update.message.from_user.id
     test_start_time = context.user_data.get("test_start_time", datetime.now().strftime("%Y%m%d_%H%M%S"))
@@ -242,7 +260,7 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
 
     context.user_data["last_test_answers"] = context.user_data.get("test_answers", {})
     prompt = build_gemini_prompt_for_test(context.user_data.get("test_answers", {}))
-    gemini_response = await call_gemini_api(prompt)  # для теста используем max_tokens по умолчанию (150)
+    gemini_response = await call_gemini_api(prompt)  # используется дефолтное значение max_tokens
     interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
     message = (
         f"Результат анализа:\n{interpretation}\n\n"
@@ -254,14 +272,22 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
         message,
         reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
     )
+
+    # Автоматический запуск запланированной ретроспективы:
+    if user_id in scheduled_retrospectives:
+        scheduled_day = scheduled_retrospectives[user_id]
+        today = datetime.now()
+        current_week = today.isocalendar()[1]
+        last_retro_week = context.user_data.get("last_retrospective_week")
+        if today.weekday() >= scheduled_day and last_retro_week != current_week:
+            await update.message.reply_text("Запущена запланированная ретроспектива:")
+            await run_retrospective_now(update, context)
     return GEMINI_CHAT
 
 async def after_test_choice_handler(update: Update, context: CallbackContext) -> int:
     choice = update.message.text.strip().lower()
     if choice == "главное меню":
-        await update.message.reply_text("Возвращаемся в главное меню.", reply_markup=ReplyKeyboardRemove())
-        await start(update, context)
-        return ConversationHandler.END
+        return await exit_to_main(update, context)
     elif choice == "пообщаться с gemini":
         await update.message.reply_text(
             "Теперь вы можете общаться с ИИ-психологом. Отправляйте свои сообщения, "
@@ -275,19 +301,12 @@ async def after_test_choice_handler(update: Update, context: CallbackContext) ->
         return AFTER_TEST_CHOICE
 
 async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
-    """
-    Обработчик сообщений в режиме общения по результатам теста.
-    Формируется новый промпт на основе вопроса клиента и результатов теста.
-    Ответ должен быть конкретным, кратким (не более 120 слов) и не содержать символов форматирования.
-    """
     user_input = update.message.text.strip()
     if user_input.lower() == "главное меню":
-        await update.message.reply_text("Возвращаемся в главное меню.", reply_markup=ReplyKeyboardRemove())
-        await start(update, context)
-        return ConversationHandler.END
+        return await exit_to_main(update, context)
     test_answers = context.user_data.get("last_test_answers", {})
     prompt = build_gemini_prompt_for_followup_chat(user_input, test_answers)
-    gemini_response = await call_gemini_api(prompt)  # max_tokens=150 по умолчанию
+    gemini_response = await call_gemini_api(prompt)  # используется дефолтное значение max_tokens
     answer = gemini_response.get("interpretation", "Нет ответа от Gemini.")
     await update.message.reply_text(
         answer,
@@ -298,19 +317,20 @@ async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
 # ----------------------- Обработчики ретроспективы -----------------------
 
 async def retrospective_start(update: Update, context: CallbackContext) -> int:
-    keyboard = [["Ретроспектива сейчас", "Запланировать ретроспективу"]]
+    keyboard = [["Ретроспектива сейчас", "Запланировать ретроспективу", "Главное меню"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     await update.message.reply_text("Выберите вариант ретроспективы:", reply_markup=reply_markup)
     return RETRO_CHOICE
 
 async def retrospective_choice_handler(update: Update, context: CallbackContext) -> int:
     choice = update.message.text.strip().lower()
-    if choice == "ретроспектива сейчас":
+    if choice == "главное меню":
+        return await exit_to_main(update, context)
+    elif choice == "ретроспектива сейчас":
         await run_retrospective_now(update, context)
-        # После вывода итогов недели переходим в режим обсуждения ретроспективы
         return RETRO_CHAT
     elif choice == "запланировать ретроспективу":
-        days = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+        days = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье", "Главное меню"]
         reply_markup = ReplyKeyboardMarkup([days], resize_keyboard=True, one_time_keyboard=True)
         await update.message.reply_text("Выберите день недели для ретроспективы:", reply_markup=reply_markup)
         return RETRO_SCHEDULE_DAY
@@ -320,6 +340,8 @@ async def retrospective_choice_handler(update: Update, context: CallbackContext)
 
 async def retrospective_schedule_day(update: Update, context: CallbackContext) -> int:
     day_text = update.message.text.strip().lower()
+    if day_text == "главное меню":
+        return await exit_to_main(update, context)
     days_mapping = {
         "понедельник": 0,
         "вторник": 1,
@@ -330,7 +352,7 @@ async def retrospective_schedule_day(update: Update, context: CallbackContext) -
         "воскресенье": 6
     }
     if day_text not in days_mapping:
-        await update.message.reply_text("Неверный ввод. Пожалуйста, выберите день недели.")
+        await update.message.reply_text("Неверный ввод. Пожалуйста, выберите день недели или 'Главное меню'.")
         return RETRO_SCHEDULE_DAY
     day_number = days_mapping[day_text]
     user_id = update.message.from_user.id
@@ -358,7 +380,7 @@ async def run_retrospective_now(update: Update, context: CallbackContext):
         except Exception as e:
             logger.error(f"Ошибка чтения файла {file_path}: {e}")
     if len(tests) < 4:
-        await update.message.reply_text("Недостаточно данных для ретроспективы. Пройдите тест минимум 4 раза за 7 дней.")
+        await update.message.reply_text("Недостаточно данных для ретроспективы. Пройдите тест минимум 4 раза за 7 дней.", reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
         return
     sums = {f"fixed_{i}": 0 for i in range(1, 7)}
     counts = {f"fixed_{i}": 0 for i in range(1, 7)}
@@ -387,30 +409,24 @@ async def run_retrospective_now(update: Update, context: CallbackContext):
         averages["Настроение"] = None
 
     prompt = build_gemini_prompt_for_retro(averages, len(tests))
-    # Ограничение для ретроспективы — 500 токенов
-    gemini_response = await call_gemini_api(prompt, max_tokens=500)
+    # В ретроспективе больше не указываем max_tokens – используем дефолтное значение
+    gemini_response = await call_gemini_api(prompt)
     interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
-    # Сохраняем общий обзор недели для дальнейшего обсуждения (не повторяя его)
-    context.user_data["week_overview"] = interpretation
+    # Сохраняем номер недели, в которой уже была запущена ретроспектива
+    current_week = now.isocalendar()[1]
+    context.user_data["last_retrospective_week"] = current_week
     message = (
         f"Ретроспектива за последнюю неделю:\n{interpretation}\n\n"
-        "Если хотите обсудить итоги недели, задайте свой вопрос."
+        "Если хотите обсудить итоги недели, задайте свой вопрос.\n"
+        "Для выхода в главное меню нажмите кнопку «Главное меню»."
     )
-    await update.message.reply_text(message)
+    await update.message.reply_text(message, reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
     return RETRO_CHAT
 
 async def retrospective_chat_handler(update: Update, context: CallbackContext) -> int:
-    """
-    Обработчик обсуждения итогов недели.
-    Использует сохранённый общий обзор недели как контекст, но не повторяет его.
-    Ответ должен быть кратким (не более 120 слов) и содержать рекомендации по вопросу клиента.
-    В конце ответа строго предложи обсудить итоги недели.
-    """
     user_input = update.message.text.strip()
     if user_input.lower() == "главное меню":
-        await update.message.reply_text("Возвращаемся в главное меню.", reply_markup=ReplyKeyboardRemove())
-        await start(update, context)
-        return ConversationHandler.END
+        return await exit_to_main(update, context)
     week_overview = context.user_data.get("week_overview", "")
     prompt = build_gemini_prompt_for_retro_chat(user_input, week_overview)
     gemini_response = await call_gemini_api(prompt, max_tokens=150)
@@ -430,7 +446,7 @@ async def help_command(update: Update, context: CallbackContext) -> None:
         "• Тест – пройти тест (6 фиксированных вопросов и 2 открытых).\n"
         "• Ретроспектива – анализ изменений за последнюю неделю и обсуждение итогов.\n"
         "• Помощь – справочная информация.\n\n"
-        "После теста вы можете общаться с ИИ-психологом. Для выхода в главное меню нажмите «Главное меню»."
+        "Во всех этапах работы доступна кнопка «Главное меню» для возврата в стартовое меню."
     )
     await update.message.reply_text(
         help_text,
@@ -465,7 +481,7 @@ def main() -> None:
             AFTER_TEST_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, after_test_choice_handler)],
             GEMINI_CHAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gemini_chat_handler)]
         },
-        fallbacks=[CommandHandler("cancel", test_cancel)],
+        fallbacks=[CommandHandler("cancel", test_cancel), MessageHandler(filters.Regex("^Главное меню$"), exit_to_main)],
         allow_reentry=True
     )
     app.add_handler(test_conv_handler)
@@ -478,7 +494,7 @@ def main() -> None:
             RETRO_SCHEDULE_DAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, retrospective_schedule_day)],
             RETRO_CHAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, retrospective_chat_handler)]
         },
-        fallbacks=[CommandHandler("cancel", test_cancel)],
+        fallbacks=[CommandHandler("cancel", test_cancel), MessageHandler(filters.Regex("^Главное меню$"), exit_to_main)],
         allow_reentry=True
     )
     app.add_handler(retro_conv_handler)
