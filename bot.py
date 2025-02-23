@@ -22,8 +22,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ----------------------- Константы для вопросов -----------------------
-
-# Фиксированные вопросы для каждого дня недели с подробными пояснениями
 WEEKDAY_FIXED_QUESTIONS = {
     0: [  # Понедельник
         "Оцените, насколько ваше самочувствие сегодня ближе к хорошему или плохому (при 1 – крайне плохое самочувствие, а 7 – превосходное самочувствие)",
@@ -83,7 +81,6 @@ WEEKDAY_FIXED_QUESTIONS = {
     ]
 }
 
-# Открытые вопросы остаются неизменными для всех дней
 OPEN_QUESTIONS = [
     "7. Какие три слова лучше всего описывают ваше текущее состояние?",
     "8. Что больше всего повлияло на ваше состояние сегодня?"
@@ -94,42 +91,38 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# Папка для напоминаний (на английском)
 REMINDER_DIR = os.path.join(BASE_DIR, "reminder")
 os.makedirs(REMINDER_DIR, exist_ok=True)
-# Даем права на запись
 os.chmod(REMINDER_DIR, 0o777)
 
 # ----------------------- Состояния для ConversationHandler -----------------------
-# Состояния для теста (фиксированные и открытые вопросы)
 TEST_FIXED_1, TEST_FIXED_2, TEST_FIXED_3, TEST_FIXED_4, TEST_FIXED_5, TEST_FIXED_6, TEST_OPEN_1, TEST_OPEN_2 = range(8)
-# Состояния для ретроспективы
 RETRO_CHOICE, RETRO_SCHEDULE_DAY = range(8, 10)
 RETRO_CHAT = 10
-# Состояния для общения после теста
 AFTER_TEST_CHOICE, GEMINI_CHAT = range(11, 13)
-# Состояния для раздела "Напоминание" (начинаем с 100)
 REMINDER_CHOICE, REMINDER_DAILY_TIME, REMINDER_DAILY_REMIND = range(100, 103)
 
-# Глобальный словарь для запланированных ретроспектив (user_id -> weekday)
 scheduled_retrospectives = {}
 
 # ----------------------- Вспомогательные функции -----------------------
-
 def build_fixed_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [[str(i) for i in range(1, 8)], ["Главное меню"]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
 async def exit_to_main(update: Update, context: CallbackContext) -> int:
     context.user_data.clear()
-    await update.message.reply_text("Возвращаемся в главное меню.", reply_markup=ReplyKeyboardRemove())
-    await start(update, context)
+    # Объединяем сообщение об отмене и показ главного меню в один ответ
+    main_menu_keyboard = [["Тест", "Ретроспектива"], ["Напоминание", "Помощь"]]
+    reply_markup = ReplyKeyboardMarkup(main_menu_keyboard, resize_keyboard=True, one_time_keyboard=True)
+    await update.message.reply_text(
+        "Возвращаемся в главное меню.\n\nДобро пожаловать! Выберите действие:",
+        reply_markup=reply_markup
+    )
     return ConversationHandler.END
 
-# Главное меню с кнопками: Тест, Ретроспектива, Напоминание, Помощь
 async def start(update: Update, context: CallbackContext) -> None:
-    keyboard = [["Тест", "Ретроспектива"], ["Напоминание", "Помощь"]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+    main_menu_keyboard = [["Тест", "Ретроспектива"], ["Напоминание", "Помощь"]]
+    reply_markup = ReplyKeyboardMarkup(main_menu_keyboard, resize_keyboard=True, one_time_keyboard=True)
     await update.message.reply_text("Добро пожаловать! Выберите действие:", reply_markup=reply_markup)
 
 def remaining_days_in_month() -> int:
@@ -137,24 +130,12 @@ def remaining_days_in_month() -> int:
     _, last_day = monthrange(today.year, today.month)
     return last_day - today.day
 
-# Функция сохранения напоминания: записывает id пользователя и время напоминания
 def save_reminder(user_id: int, reminder_time: str):
     reminder_file = os.path.join(REMINDER_DIR, "reminders.txt")
     with open(reminder_file, "a", encoding="utf-8") as f:
         f.write(f"{user_id}: {reminder_time}\n")
 
-# ----------------------- Функции формирования промптов для Gemini -----------------------
-
 def build_gemini_prompt_for_test(fixed_questions: list, test_answers: dict) -> str:
-    """
-    Формирует промпт для анализа результатов теста.
-    Инструкция: Клиент прошёл ежедневный опрос, состоящий из фиксированных вопросов по 7-балльной шкале и 2 открытых вопросов.
-    Фиксированные вопросы оцениваются так, что 1 означает крайне негативное состояние, а 7 – исключительно позитивное.
-    Каждая шкала состоит из 2 вопросов (итоговый балл = сумма двух оценок, диапазон 2–14, где 2–5 – низкий, 6–10 – средний, 11–14 – высокий).
-    Пожалуйста, выполните все вычисления итоговых баллов в уме без вывода промежуточных данных.
-    Сформируйте один абзац общего анализа итоговых баллов и динамики состояния клиента, а затем сразу кратко опишите анализ открытых вопросов.
-    Запрещается использование символа "*" для форматирования результатов.
-    """
     prompt = ("Вы профессиональный психолог с 10-летним стажем. Клиент прошёл ежедневный опрос.\n"
               "Фиксированные вопросы оцениваются по 7-балльной шкале, где 1 – крайне негативное состояние, а 7 – исключительно позитивное состояние.\n"
               "Каждая шкала состоит из 2 вопросов (итоговый балл = сумма двух оценок, диапазон 2–14: 2–5 – низкий, 6–10 – средний, 11–14 – высокий).\n"
@@ -238,7 +219,6 @@ async def call_gemini_api(prompt: str, max_tokens: int = 150) -> dict:
         return {"interpretation": "Ошибка при обращении к Gemini API."}
 
 # ----------------------- Обработчики теста -----------------------
-
 async def test_cancel(update: Update, context: CallbackContext) -> int:
     await update.message.reply_text("Тест отменён.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
@@ -360,7 +340,6 @@ async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
     return GEMINI_CHAT
 
 # ----------------------- Обработчики ретроспективы -----------------------
-
 async def retrospective_start(update: Update, context: CallbackContext) -> int:
     keyboard = [["Ретроспектива сейчас", "Запланировать ретроспективу", "Главное меню"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
@@ -481,7 +460,6 @@ async def retrospective_chat_handler(update: Update, context: CallbackContext) -
     return RETRO_CHAT
 
 # ----------------------- Обработчики раздела "Напоминание" -----------------------
-
 async def reminder_start(update: Update, context: CallbackContext) -> int:
     keyboard = [["Ежедневный тест", "Ретроспектива"], ["Главное меню"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
@@ -513,7 +491,6 @@ async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 # ----------------------- Дополнительные команды -----------------------
-
 async def help_command(update: Update, context: CallbackContext) -> None:
     help_text = (
         "Наш бот предназначен для оценки вашего состояния с помощью короткого теста.\n\n"
@@ -533,7 +510,6 @@ async def error_handler(update: object, context: CallbackContext) -> None:
     logger.error(f"Ошибка при обработке обновления {update}: {context.error}")
 
 # ----------------------- Основная функция -----------------------
-
 def main() -> None:
     TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     if not TOKEN:
@@ -542,7 +518,6 @@ def main() -> None:
 
     app = Application.builder().token(TOKEN).build()
 
-    # ConversationHandler для теста
     test_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Тест$"), test_start)],
         states={
@@ -565,7 +540,6 @@ def main() -> None:
     )
     app.add_handler(test_conv_handler)
 
-    # ConversationHandler для ретроспективы
     retro_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Ретроспектива$"), retrospective_start)],
         states={
@@ -581,7 +555,6 @@ def main() -> None:
     )
     app.add_handler(retro_conv_handler)
 
-    # ConversationHandler для раздела "Напоминание"
     reminder_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Напоминание$"), reminder_start)],
         states={
