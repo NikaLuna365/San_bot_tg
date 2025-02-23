@@ -12,6 +12,7 @@ WORKDIR /app
 
 # Копируем файл зависимостей и устанавливаем их
 COPY requirements.txt .
+RUN mkdir -p /app/reminder && chmod 777 /app/reminder
 RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
 # Копируем весь исходный код проекта в контейнер
