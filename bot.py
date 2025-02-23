@@ -22,14 +22,68 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ----------------------- Константы для вопросов -----------------------
-FIXED_QUESTIONS = [
-    "1. Как вы оцениваете свое физическое состояние сейчас? (1 – очень плохое, 7 – отличное)",
-    "2. Чувствуете ли вы себя бодрым/здоровым? (1 – ощущаю сильную усталость/болезнь, 7 – полностью бодрый и здоровый)",
-    "3. Чувствуете ли вы себя энергичным? (1 – совсем нет сил, 7 – полон энергии)",
-    "4. Чувствуете ли вы усталость или необходимость отдохнуть? (1 – крайне утомлен, 7 – полностью отдохнувший)",
-    "5. Как вы оцениваете свое настроение сейчас? (1 – очень плохое, 7 – отличное)",
-    "6. Чувствуете ли вы себя позитивно или негативно настроенным? (1 – крайне негативно, 7 – исключительно позитивно)"
-]
+
+# Словарь фиксированных вопросов по дням недели (0 – понедельник, 6 – воскресенье)
+WEEKDAY_FIXED_QUESTIONS = {
+    0: [  # Понедельник
+        "Самочувствие хорошее — Самочувствие плохое",
+        "Чувствую себя сильным — Чувствую себя слабым",
+        "Пассивный — Активный",
+        "Малоподвижный — Подвижный",
+        "Весёлый — Грустный",
+        "Хорошее настроение — Плохое настроение"
+    ],
+    1: [  # Вторник
+        "Работоспособный — Разбитый",
+        "Полный сил — Обессиленный",
+        "Медлительный — Быстрый",
+        "Бездеятельный — Деятельный",
+        "Счастливый — Несчастный",
+        "Жизнерадостный — Мрачный"
+    ],
+    2: [  # Среда
+        "Напряжённый — Расслабленный",
+        "Здоровый — Больной",
+        "Безучастный — Увлечённый",
+        "Равнодушный — Заинтересованный",
+        "Восторженный — Унылый",
+        "Радостный — Печальный"
+    ],
+    3: [  # Четверг
+        "Отдохнувший — Усталый",
+        "Свежий — Изнурённый",
+        "Сонливый — Возбуждённый",
+        "Желание отдохнуть — Желание работать",
+        "Спокойный — Взволнованный",
+        "Оптимистичный — Пессимистичный"
+    ],
+    4: [  # Пятница
+        "Выносливый — Утомляемый",
+        "Бодрый — Вялый",
+        "Соображать трудно — Соображать легко",
+        "Рассеянный — Внимательный",
+        "Полный надежд — Разочарованный",
+        "Довольный — Недовольный"
+    ],
+    5: [  # Суббота
+        "Бодрствующий — Сонный",
+        "Расслабленный — Напряжённый",
+        "Свежий — Утомлённый",
+        "Здоровый — Нездоровый",
+        "Энергичный — Вялый",
+        "Решительный — Колеблющийся"
+    ],
+    6: [  # Воскресенье
+        "Сосредоточенный — Рассеянный",
+        "Деятельный — Пассивный",
+        "Оптимистичный — Пессимистичный",
+        "Спокойный — Взволнованный",
+        "Уверенный — Неуверенный",
+        "Довольный — Недовольный"
+    ]
+}
+
+# Открытые вопросы остаются одними и теми же для каждого дня
 OPEN_QUESTIONS = [
     "7. Какие три слова лучше всего описывают ваше текущее состояние?",
     "8. Что больше всего повлияло на ваше состояние сегодня?"
@@ -75,45 +129,44 @@ def remaining_days_in_month() -> int:
     _, last_day = monthrange(today.year, today.month)
     return last_day - today.day
 
-def build_gemini_prompt_for_test(test_answers: dict) -> str:
+def build_gemini_prompt_for_test(fixed_questions: list, test_answers: dict) -> str:
     """
     Формирует промпт для анализа результатов теста.
-    Инструкция: Пользователь проходил опросы каждый день. Дай общий обзор состояния клиента за неделю,
-    не вдаваясь в подробности (не более 120 слов) и в конце предложи обсудить результаты.
+    Инструкция: Клиент проходил ежедневный опрос, состоящий из фиксированных вопросов по 7-балльной шкале и 2 открытых вопросов.
+    Для фиксированных вопросов: оценка 1 означает крайне негативное состояние (например, очень плохое самочувствие, сильная усталость, плохое настроение),
+    а оценка 7 – исключительно позитивное состояние (например, отличное самочувствие, высокий уровень энергии, прекрасное настроение).
+    Проанализируйте результаты и дайте краткий вывод, предложив обсудить итоги недели.
     """
-    standard = (
-        "Вы профессиональный психолог с 10-летним стажем. Клиент проходил опросы каждый день, и ниже приведены его результаты за прошедшую неделю. "
-        "Проанализируй динамику изменений и дай краткий общий обзор итогов недели (не более 120 слов), не вдаваясь в подробности. "
-        "В конце ответа строго предложи обсудить итоги недели."
-    )
-    prompt = standard + "\n\n"
-    all_questions = FIXED_QUESTIONS + OPEN_QUESTIONS
-    for i, question in enumerate(all_questions, start=1):
-        key = f"fixed_{i}" if i <= 6 else f"open_{i-6}"
+    prompt = ("Вы профессиональный психолог с 10-летним стажем. Клиент прошёл ежедневный опрос.\n"
+              "Фиксированные вопросы оцениваются по 7-балльной шкале, где 1 – крайне негативное состояние, 7 – исключительно позитивное состояние.\n"
+              "Каждая шкала состоит из 2 вопросов, итоговый балл по шкале равен сумме двух оценок (диапазон от 2 до 14): 2–5 – низкий уровень, 6–10 – средний, 11–14 – высокий.\n\n")
+    for i, question in enumerate(fixed_questions, start=1):
+        key = f"fixed_{i}"
         answer = test_answers.get(key, "не указано")
         prompt += f"{i}. {question}\n   Ответ: {answer}\n"
+    for j, question in enumerate(OPEN_QUESTIONS, start=1):
+        key = f"open_{j}"
+        answer = test_answers.get(key, "не указано")
+        prompt += f"{len(fixed_questions)+j}. {question}\n   Ответ: {answer}\n"
     logger.info(f"Промпт для теста:\n{prompt}")
     return prompt
 
-def build_gemini_prompt_for_followup_chat(user_message: str, test_answers: dict) -> str:
+def build_gemini_prompt_for_followup_chat(fixed_questions: list, user_message: str, test_answers: dict) -> str:
     """
-    Формирует промпт для общения по тесту.
-    Инструкция: Используй данные сегодняшнего теста. Ответ должен быть конкретным и кратким (не более 120 слов),
-    не повторять общий обзор, а отвечать только на вопрос клиента. В конце ответа предложи обсудить итоги недели.
-    Запрещено использовать символы форматирования.
+    Формирует промпт для общения по результатам теста.
+    Используйте данные текущего теста и инструкцию, аналогичную предыдущему промпту.
     """
-    standard = (
-        "Вы профессиональный психолог с 10-летним стажем. Клиент уже получил общий обзор своего состояния по сегодняшнему тесту. "
-        "Теперь ответь на следующий вопрос, используя только данные теста. Не повторяй общий обзор, а дай конкретные рекомендации. "
-        "Ответ должен быть кратким (не более 120 слов) и не содержать символов форматирования. "
-        "В конце ответа строго предложи обсудить итоги недели."
-    )
-    prompt = standard + "\n\nДанные теста:\n"
-    all_questions = FIXED_QUESTIONS + OPEN_QUESTIONS
-    for i, question in enumerate(all_questions, start=1):
-        key = f"fixed_{i}" if i <= 6 else f"open_{i-6}"
+    prompt = ("Вы профессиональный психолог с 10-летним стажем. Клиент уже получил общий вывод по сегодняшнему опросу.\n"
+              "Используйте данные теста для ответа на следующий вопрос, не повторяя общий вывод.\n"
+              "В конце ответа предложите обсудить итоги недели.\n\nДанные теста:\n")
+    for i, question in enumerate(fixed_questions, start=1):
+        key = f"fixed_{i}"
         answer = test_answers.get(key, "не указано")
         prompt += f"{i}. {question}\n   Ответ: {answer}\n"
+    for j, question in enumerate(OPEN_QUESTIONS, start=1):
+        key = f"open_{j}"
+        answer = test_answers.get(key, "не указано")
+        prompt += f"{len(fixed_questions)+j}. {question}\n   Ответ: {answer}\n"
     prompt += "\nВопрос клиента: " + user_message + "\n"
     logger.info(f"Промпт для общения по тесту:\n{prompt}")
     return prompt
@@ -121,16 +174,12 @@ def build_gemini_prompt_for_followup_chat(user_message: str, test_answers: dict)
 def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
     """
     Формирует промпт для ретроспективного анализа.
-    Инструкция: Проведи краткий обзор ключевых событий, произошедших за прошедшую неделю, 
-    а также кратко освети динамику состояния клиента за эту неделю. Ответ не должен превышать 120 слов.
+    Инструкция: Проведите краткий обзор ключевых событий за прошедшую неделю с учётом средних баллов по каждой шкале.
+    Фиксированные вопросы оцениваются по 7-балльной шкале (сумма двух вопросов на шкалу: 2–5 – низкий, 6–10 – средний, 11–14 – высокий).
     """
-    standard = (
-        "Вы профессиональный психолог с 10-летним стажем. Клиент проходил опросы каждый день. "
-        "Пожалуйста, проведите краткий обзор ключевых событий, произошедших за прошедшую неделю, "
-        "а также кратко осветите динамику состояния клиента за эту неделю. Ответ не должен превышать 120 слов."
-    )
-    prompt = standard + "\n\n"
-    prompt += f"Количество тестов: {test_count}\n"
+    prompt = ("Вы профессиональный психолог с 10-летним стажем. Клиент проходил ежедневные опросы.\n"
+              f"Количество тестов: {test_count}\n"
+              "Фиксированные вопросы оцениваются по 7-балльной шкале (итоговая оценка каждой шкалы равна сумме двух вопросов, диапазон 2–14: 2–5 – низкий, 6–10 – средний, 11–14 – высокий).\n\n")
     for category, avg in averages.items():
         prompt += f"{category}: {avg}\n"
     logger.info(f"Промпт для ретроспективы:\n{prompt}")
@@ -139,28 +188,21 @@ def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
 def build_gemini_prompt_for_retro_chat(user_message: str, week_overview: str) -> str:
     """
     Формирует промпт для обсуждения итогов недели.
-    Инструкция: Используй ранее полученный общий обзор итогов недели (не повторяя его) как контекст.
-    Ответ должен быть конкретным и кратким (не более 120 слов) и содержать рекомендации по заданному вопросу.
-    В конце ответа строго предложи обсудить итоги недели. Запрещено повторять общий обзор.
     """
-    standard = (
-        "Вы профессиональный психолог с 10-летним стажем. Ниже приведен общий обзор итогов недели, полученный ранее. "
-        "Не повторяйте этот обзор, а используйте его как контекст для ответа на следующий вопрос клиента. "
-        "Ответ должен быть конкретным, кратким (не более 120 слов) и содержать рекомендации по заданному вопросу. "
-        "В конце ответа строго предложите обсудить итоги недели. "
-        "Запрещено использовать символы форматирования."
-    )
-    prompt = standard + "\n\nОбзор итогов недели: " + week_overview + "\n\nВопрос клиента: " + user_message + "\n"
+    prompt = ("Вы профессиональный психолог с 10-летним стажем. Ниже приведён общий обзор итогов недели.\n"
+              "Используйте его как контекст для ответа на следующий вопрос клиента, давая конкретные рекомендации.\n"
+              "В конце ответа предложите обсудить итоги недели. Запрещено использовать символы форматирования.\n\n"
+              "Обзор итогов недели: " + week_overview + "\n\nВопрос клиента: " + user_message + "\n")
     logger.info(f"Промпт для обсуждения недели:\n{prompt}")
     return prompt
 
-async def call_gemini_api(prompt: str, max_tokens: int = 150) -> dict:
+async def call_gemini_api(prompt: str, max_tokens: int = 300) -> dict:
     """
     Отправляет запрос к Gemini API.
     Параметры генерации:
       - candidate_count: 1
       - max_output_tokens: задается через параметр max_tokens (150 по умолчанию)
-      - temperature: 0.4 (низкая для детерминированного ответа)
+      - temperature: 0.4
       - top_p: 1.0, top_k: 40
     """
     api_key = os.getenv("GEMINI_API_KEY")
@@ -206,7 +248,11 @@ async def test_start(update: Update, context: CallbackContext) -> int:
     context.user_data['test_answers'] = {}
     context.user_data['test_start_time'] = datetime.now().strftime("%Y%m%d_%H%M%S")
     context.user_data['question_index'] = 0
-    await update.message.reply_text(FIXED_QUESTIONS[0], reply_markup=build_fixed_keyboard())
+    # Определяем текущий день недели (0 – понедельник, 6 – воскресенье)
+    current_day = datetime.now().weekday()
+    fixed_questions = WEEKDAY_FIXED_QUESTIONS.get(current_day, WEEKDAY_FIXED_QUESTIONS[0])
+    context.user_data['fixed_questions'] = fixed_questions
+    await update.message.reply_text(fixed_questions[0], reply_markup=build_fixed_keyboard())
     return TEST_FIXED_1
 
 async def test_fixed_handler(update: Update, context: CallbackContext) -> int:
@@ -221,11 +267,13 @@ async def test_fixed_handler(update: Update, context: CallbackContext) -> int:
     context.user_data['test_answers'][f"fixed_{index+1}"] = answer
     index += 1
     context.user_data['question_index'] = index
-    if index < len(FIXED_QUESTIONS):
-        await update.message.reply_text(FIXED_QUESTIONS[index], reply_markup=build_fixed_keyboard())
+    fixed_questions = context.user_data.get('fixed_questions', [])
+    if index < len(fixed_questions):
+        await update.message.reply_text(fixed_questions[index], reply_markup=build_fixed_keyboard())
         return TEST_FIXED_1 + index
     else:
-        await update.message.reply_text(OPEN_QUESTIONS[0], reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
+        await update.message.reply_text(OPEN_QUESTIONS[0],
+                                        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
         return TEST_OPEN_1
 
 async def test_open_1(update: Update, context: CallbackContext) -> int:
@@ -233,7 +281,8 @@ async def test_open_1(update: Update, context: CallbackContext) -> int:
     if user_input.lower() == "главное меню":
         return await exit_to_main(update, context)
     context.user_data['test_answers']['open_1'] = user_input
-    await update.message.reply_text(OPEN_QUESTIONS[1], reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
+    await update.message.reply_text(OPEN_QUESTIONS[1],
+                                    reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
     return TEST_OPEN_2
 
 async def test_open_2(update: Update, context: CallbackContext) -> int:
@@ -259,8 +308,9 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
         return ConversationHandler.END
 
     context.user_data["last_test_answers"] = context.user_data.get("test_answers", {})
-    prompt = build_gemini_prompt_for_test(context.user_data.get("test_answers", {}))
-    gemini_response = await call_gemini_api(prompt)  # используется дефолтное значение max_tokens
+    prompt = build_gemini_prompt_for_test(context.user_data.get("fixed_questions", []),
+                                          context.user_data.get("test_answers", {}))
+    gemini_response = await call_gemini_api(prompt)
     interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
     message = (
         f"Результат анализа:\n{interpretation}\n\n"
@@ -305,8 +355,9 @@ async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
     if user_input.lower() == "главное меню":
         return await exit_to_main(update, context)
     test_answers = context.user_data.get("last_test_answers", {})
-    prompt = build_gemini_prompt_for_followup_chat(user_input, test_answers)
-    gemini_response = await call_gemini_api(prompt)  # используется дефолтное значение max_tokens
+    fixed_questions = context.user_data.get("fixed_questions", [])
+    prompt = build_gemini_prompt_for_followup_chat(fixed_questions, user_input, test_answers)
+    gemini_response = await call_gemini_api(prompt)
     answer = gemini_response.get("interpretation", "Нет ответа от Gemini.")
     await update.message.reply_text(
         answer,
@@ -380,7 +431,8 @@ async def run_retrospective_now(update: Update, context: CallbackContext):
         except Exception as e:
             logger.error(f"Ошибка чтения файла {file_path}: {e}")
     if len(tests) < 4:
-        await update.message.reply_text("Недостаточно данных для ретроспективы. Пройдите тест минимум 4 раза за 7 дней.", reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
+        await update.message.reply_text("Недостаточно данных для ретроспективы. Пройдите тест минимум 4 раза за 7 дней.",
+                                        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
         return
     sums = {f"fixed_{i}": 0 for i in range(1, 7)}
     counts = {f"fixed_{i}": 0 for i in range(1, 7)}
@@ -409,10 +461,8 @@ async def run_retrospective_now(update: Update, context: CallbackContext):
         averages["Настроение"] = None
 
     prompt = build_gemini_prompt_for_retro(averages, len(tests))
-    # В ретроспективе больше не указываем max_tokens – используем дефолтное значение
     gemini_response = await call_gemini_api(prompt)
     interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
-    # Сохраняем номер недели, в которой уже была запущена ретроспектива
     current_week = now.isocalendar()[1]
     context.user_data["last_retrospective_week"] = current_week
     message = (
@@ -429,7 +479,7 @@ async def retrospective_chat_handler(update: Update, context: CallbackContext) -
         return await exit_to_main(update, context)
     week_overview = context.user_data.get("week_overview", "")
     prompt = build_gemini_prompt_for_retro_chat(user_input, week_overview)
-    gemini_response = await call_gemini_api(prompt, max_tokens=150)
+    gemini_response = await call_gemini_api(prompt, max_tokens=300)
     answer = gemini_response.get("interpretation", "Нет ответа от Gemini.")
     await update.message.reply_text(
         answer,
@@ -443,7 +493,7 @@ async def help_command(update: Update, context: CallbackContext) -> None:
     help_text = (
         "Наш бот предназначен для оценки вашего состояния с помощью короткого теста.\n\n"
         "Команды:\n"
-        "• Тест – пройти тест (6 фиксированных вопросов и 2 открытых).\n"
+        "• Тест – пройти тест (фиксированные вопросы, зависящие от дня недели, и 2 открытых вопроса).\n"
         "• Ретроспектива – анализ изменений за последнюю неделю и обсуждение итогов.\n"
         "• Помощь – справочная информация.\n\n"
         "Во всех этапах работы доступна кнопка «Главное меню» для возврата в стартовое меню."
