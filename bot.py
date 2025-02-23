@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # ----------------------- Константы для вопросов -----------------------
 
-# Словарь фиксированных вопросов по дням недели (0 – понедельник, 6 – воскресенье)
+# Фиксированные вопросы для каждого дня недели с подробными пояснениями
 WEEKDAY_FIXED_QUESTIONS = {
     0: [  # Понедельник
         "Оцените, насколько ваше самочувствие сегодня ближе к хорошему или плохому (при 1 – крайне плохое самочувствие, а 7 – превосходное самочувствие)",
@@ -83,7 +83,7 @@ WEEKDAY_FIXED_QUESTIONS = {
     ]
 }
 
-# Открытые вопросы остаются одними и теми же для каждого дня
+# Открытые вопросы остаются неизменными для всех дней
 OPEN_QUESTIONS = [
     "7. Какие три слова лучше всего описывают ваше текущее состояние?",
     "8. Что больше всего повлияло на ваше состояние сегодня?"
@@ -95,16 +95,11 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # ----------------------- Состояния для ConversationHandler -----------------------
-# Тест: 6 фиксированных вопросов + 2 открытых
 TEST_FIXED_1, TEST_FIXED_2, TEST_FIXED_3, TEST_FIXED_4, TEST_FIXED_5, TEST_FIXED_6, TEST_OPEN_1, TEST_OPEN_2 = range(8)
-# Ретроспектива: выбор варианта и планирование
 RETRO_CHOICE, RETRO_SCHEDULE_DAY = range(8, 10)
-# Ретроспектива для обсуждения
 RETRO_CHAT = 10
-# После теста: режим общения с Gemini по тесту
 AFTER_TEST_CHOICE, GEMINI_CHAT = range(11, 13)
 
-# Глобальный словарь для запланированных ретроспектив (user_id -> weekday)
 scheduled_retrospectives = {}
 
 # ----------------------- Вспомогательные функции -----------------------
@@ -124,7 +119,6 @@ async def start(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text("Добро пожаловать! Выберите действие:", reply_markup=reply_markup)
 
 def remaining_days_in_month() -> int:
-    """Возвращает количество дней, оставшихся до конца текущего месяца."""
     today = datetime.now()
     _, last_day = monthrange(today.year, today.month)
     return last_day - today.day
@@ -132,14 +126,20 @@ def remaining_days_in_month() -> int:
 def build_gemini_prompt_for_test(fixed_questions: list, test_answers: dict) -> str:
     """
     Формирует промпт для анализа результатов теста.
-    Инструкция: Клиент проходил ежедневный опрос, состоящий из фиксированных вопросов по 7-балльной шкале и 2 открытых вопросов.
-    Для фиксированных вопросов: оценка 1 означает крайне негативное состояние (например, очень плохое самочувствие, сильная усталость, плохое настроение),
-    а оценка 7 – исключительно позитивное состояние (например, отличное самочувствие, высокий уровень энергии, прекрасное настроение).
-    Проанализируйте результаты и дайте краткий вывод, предложив обсудить итоги недели.
+    Инструкция: Клиент прошёл ежедневный опрос, состоящий из фиксированных вопросов по 7-балльной шкале и 2 открытых вопросов.
+    Фиксированные вопросы оцениваются так, что 1 означает крайне негативное состояние, а 7 – исключительно позитивное.
+    Каждая шкала состоит из 2 вопросов (итоговый балл = сумма двух оценок, диапазон 2–14, где 2–5 – низкий уровень, 6–10 – средний, 11–14 – высокий).
+    Пожалуйста, выполните все вычисления итоговых баллов в уме без вывода промежуточных данных.
+    Затем сформируйте один абзац общего анализа итоговых баллов и динамики состояния клиента,
+    а после сразу кратко опишите анализ открытых вопросов.
+    Запрещается использование символа "*" для форматирования результатов.
     """
     prompt = ("Вы профессиональный психолог с 10-летним стажем. Клиент прошёл ежедневный опрос.\n"
-              "Фиксированные вопросы оцениваются по 7-балльной шкале, где 1 – крайне негативное состояние, 7 – исключительно позитивное состояние.\n"
-              "Каждая шкала состоит из 2 вопросов, итоговый балл по шкале равен сумме двух оценок (диапазон от 2 до 14): 2–5 – низкий уровень, 6–10 – средний, 11–14 – высокий.\n\n")
+              "Фиксированные вопросы оцениваются по 7-балльной шкале, где 1 – крайне негативное состояние, а 7 – исключительно позитивное состояние.\n"
+              "Каждая шкала состоит из 2 вопросов (итоговый балл = сумма двух оценок, диапазон 2–14: 2–5 – низкий уровень, 6–10 – средний, 11–14 – высокий).\n"
+              "Пожалуйста, выполните все вычисления итоговых баллов в уме без вывода промежуточных данных. "
+              "Сформируйте один абзац общего анализа итоговых баллов и динамики состояния клиента, а затем сразу кратко опишите анализ открытых вопросов.\n"
+              "Запрещается использование символа \"*\" для форматирования результатов.\n\n")
     for i, question in enumerate(fixed_questions, start=1):
         key = f"fixed_{i}"
         answer = test_answers.get(key, "не указано")
@@ -152,13 +152,9 @@ def build_gemini_prompt_for_test(fixed_questions: list, test_answers: dict) -> s
     return prompt
 
 def build_gemini_prompt_for_followup_chat(fixed_questions: list, user_message: str, test_answers: dict) -> str:
-    """
-    Формирует промпт для общения по результатам теста.
-    Используйте данные текущего теста и инструкцию, аналогичную предыдущему промпту.
-    """
     prompt = ("Вы профессиональный психолог с 10-летним стажем. Клиент уже получил общий вывод по сегодняшнему опросу.\n"
               "Используйте данные теста для ответа на следующий вопрос, не повторяя общий вывод.\n"
-              "В конце ответа предложите обсудить итоги недели.\n\nДанные теста:\n")
+              "В конце ответа предложите обсудить итоги недели. Запрещается использование символа \"*\" для форматирования результатов.\n\nДанные теста:\n")
     for i, question in enumerate(fixed_questions, start=1):
         key = f"fixed_{i}"
         answer = test_answers.get(key, "не указано")
@@ -172,11 +168,6 @@ def build_gemini_prompt_for_followup_chat(fixed_questions: list, user_message: s
     return prompt
 
 def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
-    """
-    Формирует промпт для ретроспективного анализа.
-    Инструкция: Проведите краткий обзор ключевых событий за прошедшую неделю с учётом средних баллов по каждой шкале.
-    Фиксированные вопросы оцениваются по 7-балльной шкале (сумма двух вопросов на шкалу: 2–5 – низкий, 6–10 – средний, 11–14 – высокий).
-    """
     prompt = ("Вы профессиональный психолог с 10-летним стажем. Клиент проходил ежедневные опросы.\n"
               f"Количество тестов: {test_count}\n"
               "Фиксированные вопросы оцениваются по 7-балльной шкале (итоговая оценка каждой шкалы равна сумме двух вопросов, диапазон 2–14: 2–5 – низкий, 6–10 – средний, 11–14 – высокий).\n\n")
@@ -186,25 +177,14 @@ def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
     return prompt
 
 def build_gemini_prompt_for_retro_chat(user_message: str, week_overview: str) -> str:
-    """
-    Формирует промпт для обсуждения итогов недели.
-    """
     prompt = ("Вы профессиональный психолог с 10-летним стажем. Ниже приведён общий обзор итогов недели.\n"
               "Используйте его как контекст для ответа на следующий вопрос клиента, давая конкретные рекомендации.\n"
-              "В конце ответа предложите обсудить итоги недели. Запрещено использовать символы форматирования.\n\n"
+              "В конце ответа предложите обсудить итоги недели. Запрещается использование символа \"*\" для форматирования результатов.\n\n"
               "Обзор итогов недели: " + week_overview + "\n\nВопрос клиента: " + user_message + "\n")
     logger.info(f"Промпт для обсуждения недели:\n{prompt}")
     return prompt
 
 async def call_gemini_api(prompt: str, max_tokens: int = 300) -> dict:
-    """
-    Отправляет запрос к Gemini API.
-    Параметры генерации:
-      - candidate_count: 1
-      - max_output_tokens: задается через параметр max_tokens (150 по умолчанию)
-      - temperature: 0.4
-      - top_p: 1.0, top_k: 40
-    """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         logger.error("GEMINI_API_KEY не задан в переменных окружения.")
@@ -213,7 +193,6 @@ async def call_gemini_api(prompt: str, max_tokens: int = 300) -> dict:
         configure(api_key=api_key)
         model = GenerativeModel("gemini-2.0-flash")
         logger.info(f"Отправка запроса к Gemini API с промптом:\n{prompt}")
-        
         gen_config = types.GenerationConfig(
             candidate_count=1,
             max_output_tokens=max_tokens,
@@ -225,7 +204,6 @@ async def call_gemini_api(prompt: str, max_tokens: int = 300) -> dict:
             lambda: model.generate_content([prompt], generation_config=gen_config)
         )
         logger.debug(f"Полный ответ от Gemini: {vars(response)}")
-        
         if hasattr(response, "text") and response.text:
             interpretation = response.text
         elif hasattr(response, "content") and response.content:
@@ -248,7 +226,6 @@ async def test_start(update: Update, context: CallbackContext) -> int:
     context.user_data['test_answers'] = {}
     context.user_data['test_start_time'] = datetime.now().strftime("%Y%m%d_%H%M%S")
     context.user_data['question_index'] = 0
-    # Определяем текущий день недели (0 – понедельник, 6 – воскресенье)
     current_day = datetime.now().weekday()
     fixed_questions = WEEKDAY_FIXED_QUESTIONS.get(current_day, WEEKDAY_FIXED_QUESTIONS[0])
     context.user_data['fixed_questions'] = fixed_questions
@@ -290,7 +267,6 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
     if user_input.lower() == "главное меню":
         return await exit_to_main(update, context)
     context.user_data['test_answers']['open_2'] = user_input
-
     user_id = update.message.from_user.id
     test_start_time = context.user_data.get("test_start_time", datetime.now().strftime("%Y%m%d_%H%M%S"))
     filename = os.path.join(DATA_DIR, f"{user_id}_{test_start_time}.json")
@@ -306,7 +282,6 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
         logger.error(f"Ошибка при сохранении теста: {e}")
         await update.message.reply_text("Произошла ошибка при сохранении данных теста.")
         return ConversationHandler.END
-
     context.user_data["last_test_answers"] = context.user_data.get("test_answers", {})
     prompt = build_gemini_prompt_for_test(context.user_data.get("fixed_questions", []),
                                           context.user_data.get("test_answers", {}))
@@ -322,8 +297,6 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
         message,
         reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
     )
-
-    # Автоматический запуск запланированной ретроспективы:
     if user_id in scheduled_retrospectives:
         scheduled_day = scheduled_retrospectives[user_id]
         today = datetime.now()
@@ -338,7 +311,7 @@ async def after_test_choice_handler(update: Update, context: CallbackContext) ->
     choice = update.message.text.strip().lower()
     if choice == "главное меню":
         return await exit_to_main(update, context)
-    elif choice == "пообщаться с gemini":
+    elif choice == "пообщаться с ИИ-психологом":
         await update.message.reply_text(
             "Теперь вы можете общаться с ИИ-психологом. Отправляйте свои сообщения, "
             "и они будут учитываться в контексте анализа вашего дня.\n"
@@ -347,7 +320,7 @@ async def after_test_choice_handler(update: Update, context: CallbackContext) ->
         )
         return GEMINI_CHAT
     else:
-        await update.message.reply_text("Пожалуйста, выберите: 'Главное меню' или 'Пообщаться с Gemini'.")
+        await update.message.reply_text("Пожалуйста, выберите: 'Главное меню' или 'Пообщаться с ИИ-психологом'.")
         return AFTER_TEST_CHOICE
 
 async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
@@ -364,8 +337,6 @@ async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
         reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
     )
     return GEMINI_CHAT
-
-# ----------------------- Обработчики ретроспективы -----------------------
 
 async def retrospective_start(update: Update, context: CallbackContext) -> int:
     keyboard = [["Ретроспектива сейчас", "Запланировать ретроспективу", "Главное меню"]]
@@ -459,7 +430,6 @@ async def run_retrospective_now(update: Update, context: CallbackContext):
         averages["Настроение"] = round((sums["fixed_5"]/counts["fixed_5"] + sums["fixed_6"]/counts["fixed_6"]) / 2, 2)
     else:
         averages["Настроение"] = None
-
     prompt = build_gemini_prompt_for_retro(averages, len(tests))
     gemini_response = await call_gemini_api(prompt)
     interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
@@ -479,15 +449,13 @@ async def retrospective_chat_handler(update: Update, context: CallbackContext) -
         return await exit_to_main(update, context)
     week_overview = context.user_data.get("week_overview", "")
     prompt = build_gemini_prompt_for_retro_chat(user_input, week_overview)
-    gemini_response = await call_gemini_api(prompt, max_tokens=300)
+    gemini_response = await call_gemini_api(prompt, max_tokens=150)
     answer = gemini_response.get("interpretation", "Нет ответа от Gemini.")
     await update.message.reply_text(
         answer,
         reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
     )
     return RETRO_CHAT
-
-# ----------------------- Дополнительные команды -----------------------
 
 async def help_command(update: Update, context: CallbackContext) -> None:
     help_text = (
@@ -506,17 +474,12 @@ async def help_command(update: Update, context: CallbackContext) -> None:
 async def error_handler(update: object, context: CallbackContext) -> None:
     logger.error(f"Ошибка при обработке обновления {update}: {context.error}")
 
-# ----------------------- Основная функция -----------------------
-
 def main() -> None:
     TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     if not TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN не задан в переменных окружения.")
         return
-
     app = Application.builder().token(TOKEN).build()
-
-    # ConversationHandler для теста
     test_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Тест$"), test_start)],
         states={
@@ -535,8 +498,6 @@ def main() -> None:
         allow_reentry=True
     )
     app.add_handler(test_conv_handler)
-
-    # ConversationHandler для ретроспективы
     retro_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Ретроспектива$"), retrospective_start)],
         states={
@@ -548,11 +509,9 @@ def main() -> None:
         allow_reentry=True
     )
     app.add_handler(retro_conv_handler)
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(MessageHandler(filters.Regex("^Помощь$"), help_command))
-
     app.add_error_handler(error_handler)
     app.run_polling()
 
