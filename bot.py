@@ -153,38 +153,23 @@ def build_gemini_prompt_for_test(fixed_questions: list, test_answers: dict) -> s
     logger.info(f"Промпт для теста:\n{prompt}")
     return prompt
 
-def build_gemini_prompt_for_followup_chat(fixed_questions: list, user_message: str, test_answers: dict) -> str:
-    prompt = ("Вы профессиональный психолог с 10-летним стажем. Клиент уже получил общий вывод по сегодняшнему опросу - ВАМ ЗАПРЕЩЕНО проводить общий обзор прошедшего дня, вы должны ТОЛЬКО рассуждать в этом контексте.\n"
-              "Используйте данные теста для ответа на следующий вопрос, не повторяя общий вывод.\n"
-              "Запрещается использование символа \"*\" для форматирования результатов.\n\nДанные теста:\n")
-    for i, question in enumerate(fixed_questions, start=1):
-        key = f"fixed_{i}"
-        answer = test_answers.get(key, "не указано")
-        prompt += f"{i}. {question}\n   Ответ: {answer}\n"
-    for j, question in enumerate(OPEN_QUESTIONS, start=1):
-        key = f"open_{j}"
-        answer = test_answers.get(key, "не указано")
-        prompt += f"{len(fixed_questions)+j}. {question}\n   Ответ: {answer}\n"
-    prompt += "\nВопрос клиента: " + user_message + "\n"
-    logger.info(f"Промпт для общения по тесту:\n{prompt}")
-    return prompt
-
-def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
-    prompt = ("Вы профессиональный психолог с 10-летним стажем. Клиент проходил ежедневные опросы.\n"
-              f"Количество тестов: {test_count}\n"
-              "\n"
-              "Фиксированные вопросы оцениваются по 7-балльной шкале (итоговая оценка каждой шкалы равна сумме двух вопросов, диапазон 2–14: 2–5 – низкий, 6–10 – средний, 11–14 – высокий).\n\n")
-    for category, avg in averages.items():
-        prompt += f"{category}: {avg}\n"
-    logger.info(f"Промпт для ретроспективы:\n{prompt}")
-    return prompt
-
-def build_gemini_prompt_for_retro_chat(user_message: str, week_overview: str) -> str:
-    prompt = ("Вы профессиональный психолог с 10-летним стажем. Ниже приведён общий обзор итогов недели.\n"
-              "Используйте его как контекст для ответа на следующий вопрос клиента, давая конкретные рекомендации.\n"
-              "В конце ответа предложите обсудить итоги недели. Запрещается использование символа \"*\" для форматирования результатов.\n\n"
-              "Обзор итогов недели: " + week_overview + "\n\nВопрос клиента: " + user_message + "\n")
-    logger.info(f"Промпт для обсуждения недели:\n{prompt}")
+# Новый метод для формирования промпта при общении с ИИ-психологом.
+def build_followup_chat_prompt(user_message: str, chat_context: str) -> str:
+    prompt = (
+        "Вы — высококвалифицированный психолог с более чем десятилетним опытом работы, специализирующийся на клинической и консультативной психологии. "
+        "Ваш профессионализм подкреплён глубокими академическими знаниями, полученными в ведущих университетах, а также постоянным совершенствованием навыков через участие в семинарах, конференциях и сертификационных программах. "
+        "Вы известны своим тонким чувством эмпатии и умением выслушать, что позволяет Вам устанавливать доверительные отношения с клиентами, помогая им находить решения даже в самых сложных жизненных ситуациях. "
+        "Ваш аналитический склад ума и системный подход к оценке психологического состояния клиента позволяют Вам не только выявлять коренные причины проблем, но и разрабатывать индивидуальные стратегии, направленные на восстановление внутренней гармонии и эмоционального равновесия. "
+        "Вы всегда придерживаетесь принципов строгой конфиденциальности и этических стандартов, демонстрируя глубокое уважение к личному пространству каждого человека. "
+        "Благодаря своему многолетнему опыту, Вы умеете адаптировать современные научные методики под уникальные особенности каждого клиента, способствуя развитию их личностного потенциала, устойчивости к стрессам и способности к саморегуляции. "
+        "Ваш подход сочетает в себе научную строгость и гуманизм, что делает Вас незаменимым специалистом в помощи людям на пути к обретению эмоциональной устойчивости и жизненной гармонии.\n\n"
+        "Этапы взаимодействия:\n"
+        "1. Ежедневный опрос уже пройден – данные теста учтены, но не повторяйте их дословно.\n"
+        "2. В дальнейшем ведите беседу, опираясь на контекст опроса.\n\n"
+        "Запрещается использовать оформление с символом \"*\" для форматирования результатов.\n\n"
+        "Контекст теста: " + chat_context + "\n\n"
+        "Вопрос клиента: " + user_message
+    )
     return prompt
 
 async def call_gemini_api(prompt: str, max_tokens: int = 600) -> dict:
@@ -284,15 +269,33 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
         logger.error(f"Ошибка при сохранении теста: {e}")
         await update.message.reply_text("Произошла ошибка при сохранении данных теста.")
         return ConversationHandler.END
+
+    # Сохраняем последние ответы для общения с ИИ
     context.user_data["last_test_answers"] = context.user_data.get("test_answers", {})
+
+    # Формируем промпт для теста и получаем анализ от Gemini API
     prompt = build_gemini_prompt_for_test(context.user_data.get("fixed_questions", []),
                                           context.user_data.get("test_answers", {}))
     gemini_response = await call_gemini_api(prompt)
     interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
+
+    # Вычисляем краткое резюме результатов опроса для последующего использования в качестве контекста.
+    test_answers = context.user_data.get("test_answers", {})
+    try:
+        self_feeling = (int(test_answers.get("fixed_1")) + int(test_answers.get("fixed_2"))) / 2
+        activity = (int(test_answers.get("fixed_3")) + int(test_answers.get("fixed_4"))) / 2
+        mood = (int(test_answers.get("fixed_5")) + int(test_answers.get("fixed_6"))) / 2
+        chat_context = f"Самочувствие: {self_feeling}, Активность: {activity}, Настроение: {mood}. Открытые ответы учтены."
+    except Exception as e:
+        logger.error(f"Ошибка при формировании контекста опроса: {e}")
+        chat_context = "Данные теста учтены."
+    # Сохраняем контекст для дальнейшей беседы
+    context.user_data["chat_context"] = chat_context
+
     message = (
         f"Результат анализа:\n{interpretation}\n\n"
         "Теперь вы можете общаться с ИИ-психологом по результатам теста. Отправляйте свои сообщения, "
-        "и они будут учитываться в контексте анализа вашего дня.\n"
+        "и они будут учитываться в рамках этого чата.\n"
         "Для выхода в главное меню нажмите кнопку «Главное меню»."
     )
     await update.message.reply_text(
@@ -309,29 +312,14 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
             await run_retrospective_now(update, context)
     return GEMINI_CHAT
 
-async def after_test_choice_handler(update: Update, context: CallbackContext) -> int:
-    choice = update.message.text.strip().lower()
-    if choice == "главное меню":
-        return await exit_to_main(update, context)
-    elif choice == "пообщаться с gemini":
-        await update.message.reply_text(
-            "Теперь вы можете общаться с ИИ-психологом. Отправляйте свои сообщения, "
-            "и они будут учитываться в контексте анализа вашего дня.\n"
-            "Для выхода в главное меню нажмите кнопку «Главное меню».",
-            reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
-        )
-        return GEMINI_CHAT
-    else:
-        await update.message.reply_text("Пожалуйста, выберите: 'Главное меню' или 'Пообщаться с Gemini'.")
-        return AFTER_TEST_CHOICE
-
+# ----------------------- Обработчик общения с ИИ-психологом -----------------------
 async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
     user_input = update.message.text.strip()
     if user_input.lower() == "главное меню":
         return await exit_to_main(update, context)
-    test_answers = context.user_data.get("last_test_answers", {})
-    fixed_questions = context.user_data.get("fixed_questions", [])
-    prompt = build_gemini_prompt_for_followup_chat(fixed_questions, user_input, test_answers)
+    # Используем сохранённый контекст из результатов опроса
+    chat_context = context.user_data.get("chat_context", "")
+    prompt = build_followup_chat_prompt(user_input, chat_context)
     gemini_response = await call_gemini_api(prompt)
     answer = gemini_response.get("interpretation", "Нет ответа от Gemini.")
     await update.message.reply_text(
