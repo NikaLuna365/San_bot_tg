@@ -154,9 +154,9 @@ def build_gemini_prompt_for_test(fixed_questions: list, test_answers: dict) -> s
     return prompt
 
 def build_gemini_prompt_for_followup_chat(fixed_questions: list, user_message: str, test_answers: dict) -> str:
-    prompt = ("Вы профессиональный психолог с 10-летним стажем. Клиент уже получил общий вывод по сегодняшнему опросу.\n"
+    prompt = ("Вы профессиональный психолог с 10-летним стажем. Клиент уже получил общий вывод по сегодняшнему опросу - ВАМ ЗАПРЕЩЕНО проводить общий обзор прошедшего дня, вы должны ТОЛЬКО рассуждать в этом контексте.\n"
               "Используйте данные теста для ответа на следующий вопрос, не повторяя общий вывод.\n"
-              "В конце ответа предложите обсудить итоги недели. Запрещается использование символа \"*\" для форматирования результатов.\n\nДанные теста:\n")
+              "Запрещается использование символа \"*\" для форматирования результатов.\n\nДанные теста:\n")
     for i, question in enumerate(fixed_questions, start=1):
         key = f"fixed_{i}"
         answer = test_answers.get(key, "не указано")
@@ -172,6 +172,7 @@ def build_gemini_prompt_for_followup_chat(fixed_questions: list, user_message: s
 def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
     prompt = ("Вы профессиональный психолог с 10-летним стажем. Клиент проходил ежедневные опросы.\n"
               f"Количество тестов: {test_count}\n"
+              "\n"
               "Фиксированные вопросы оцениваются по 7-балльной шкале (итоговая оценка каждой шкалы равна сумме двух вопросов, диапазон 2–14: 2–5 – низкий, 6–10 – средний, 11–14 – высокий).\n\n")
     for category, avg in averages.items():
         prompt += f"{category}: {avg}\n"
@@ -186,7 +187,7 @@ def build_gemini_prompt_for_retro_chat(user_message: str, week_overview: str) ->
     logger.info(f"Промпт для обсуждения недели:\n{prompt}")
     return prompt
 
-async def call_gemini_api(prompt: str, max_tokens: int = 300) -> dict:
+async def call_gemini_api(prompt: str, max_tokens: int = 600) -> dict:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         logger.error("GEMINI_API_KEY не задан в переменных окружения.")
@@ -451,7 +452,7 @@ async def retrospective_chat_handler(update: Update, context: CallbackContext) -
         return await exit_to_main(update, context)
     week_overview = context.user_data.get("week_overview", "")
     prompt = build_gemini_prompt_for_retro_chat(user_input, week_overview)
-    gemini_response = await call_gemini_api(prompt, max_tokens=300)
+    gemini_response = await call_gemini_api(prompt, max_tokens=600)
     answer = gemini_response.get("interpretation", "Нет ответа от Gemini.")
     await update.message.reply_text(
         answer,
