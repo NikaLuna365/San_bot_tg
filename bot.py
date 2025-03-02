@@ -497,13 +497,13 @@ async def reminder_receive_current_time(update: Update, context: CallbackContext
     await update.message.reply_text("Во сколько напоминать о ежедневном тесте? (например, 08:00)")
     return REMINDER_DAILY_REMIND
 
-# Новый вариант реализации: функция отправки напоминания
+# Новый вариант реализации: функция отправки напоминания (используем data вместо context)
 async def send_daily_reminder(context: CallbackContext):
-    job_context = context.job.context
-    user_id = job_context['user_id']
+    job_data = context.job.data
+    user_id = job_data['user_id']
     await context.bot.send_message(chat_id=user_id, text="Напоминание: пришло время пройти ежедневный тест!")
 
-# Новый вариант реализации: установка ежедневного напоминания с использованием job_queue
+# Новый вариант реализации: установка ежедневного напоминания с использованием job_queue и data
 async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
     reminder_time_str = update.message.text.strip()  # ожидается формат "HH:MM"
     user_id = update.message.from_user.id
@@ -520,11 +520,11 @@ async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
         job = scheduled_reminders[user_id]
         job.schedule_removal()
 
-    # Планируем новое ежедневное напоминание
+    # Планируем новое ежедневное напоминание с использованием параметра data
     job = context.job_queue.run_daily(
         send_daily_reminder,
         reminder_time_obj,
-        context={'user_id': user_id},
+        data={'user_id': user_id},
         name=str(user_id)
     )
     scheduled_reminders[user_id] = job
