@@ -299,7 +299,6 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
         message,
         reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
     )
-    # Если запланирована ретроспектива, запускаем её
     if update.message.from_user.id in scheduled_retrospectives:
         scheduled_day = scheduled_retrospectives[update.message.from_user.id]
         today = datetime.now()
@@ -308,18 +307,13 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
         if today.weekday() >= scheduled_day and last_retro_week != current_week:
             await update.message.reply_text("Запущена запланированная ретроспектива:")
             await run_retrospective_now(update, context)
-    # Переход в состояние общения с ИИ
     return GEMINI_CHAT
 
 # ----------------------- Новый обработчик: после теста -----------------------
 async def after_test_choice_handler(update: Update, context: CallbackContext) -> int:
-    """
-    Обрабатывает выбор пользователя после прохождения теста.
-    """
     user_input = update.message.text.strip()
     if user_input.lower() == "главное меню":
         return await exit_to_main(update, context)
-    # Здесь можно добавить логику обработки выбора пользователя.
     await update.message.reply_text(
         "Вы выбрали дальнейшее действие после теста. (Функциональность ещё не реализована, переходим к чату с ИИ.)",
         reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
@@ -343,9 +337,6 @@ async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
 
 # ----------------------- Функции для ретроспективы -----------------------
 def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
-    """
-    Формирует промпт для ретроспективного анализа.
-    """
     prompt = f"Ретроспектива: за последнюю неделю проведено {test_count} тестов.\n"
     prompt += "Средние показатели:\n"
     for key, value in averages.items():
@@ -354,9 +345,6 @@ def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
     return prompt
 
 def build_gemini_prompt_for_retro_chat(user_message: str, week_overview: str) -> str:
-    """
-    Формирует промпт для обсуждения итогов ретроспективы.
-    """
     prompt = (
         "Анализ данных ретроспективы за последнюю неделю:\n" +
         week_overview +
@@ -596,6 +584,10 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(MessageHandler(filters.Regex("^Помощь$"), help_command))
+    
+    # Добавлен глобальный обработчик для команды "Главное меню"
+    app.add_handler(MessageHandler(filters.Regex("^(?i)главное меню$"), exit_to_main))
+    
     app.add_error_handler(error_handler)
     app.run_polling()
 
