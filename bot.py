@@ -103,6 +103,8 @@ AFTER_TEST_CHOICE, GEMINI_CHAT = range(11, 13)
 REMINDER_CHOICE, REMINDER_DAILY_TIME, REMINDER_DAILY_REMIND = range(100, 103)
 
 scheduled_retrospectives = {}
+# Новый глобальный словарь для хранения запланированных напоминаний по user_id
+scheduled_reminders = {}
 
 # ----------------------- Вспомогательные функции -----------------------
 def build_fixed_keyboard() -> ReplyKeyboardMarkup:
@@ -495,11 +497,43 @@ async def reminder_receive_current_time(update: Update, context: CallbackContext
     await update.message.reply_text("Во сколько напоминать о ежедневном тесте? (например, 08:00)")
     return REMINDER_DAILY_REMIND
 
+# Новый вариант реализации: функция отправки напоминания
+async def send_daily_reminder(context: CallbackContext):
+    job_context = context.job.context
+    user_id = job_context['user_id']
+    await context.bot.send_message(chat_id=user_id, text="Напоминание: пришло время пройти ежедневный тест!")
+
+# Новый вариант реализации: установка ежедневного напоминания с использованием job_queue
 async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
-    reminder_time = update.message.text.strip()
+    reminder_time_str = update.message.text.strip()  # ожидается формат "HH:MM"
     user_id = update.message.from_user.id
-    save_reminder(user_id, reminder_time)
-    await update.message.reply_text("Напоминание установлено!", reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
+
+    try:
+        # Преобразуем строку времени в объект datetime.time
+        reminder_time_obj = datetime.strptime(reminder_time_str, "%H:%M").time()
+    except ValueError:
+        await update.message.reply_text("Неверный формат времени. Пожалуйста, введите время в формате ЧЧ:ММ.")
+        return REMINDER_DAILY_REMIND  # возвращаемся к запросу времени
+
+    # Если у пользователя уже запланировано напоминание, отменяем его
+    if user_id in scheduled_reminders:
+        job = scheduled_reminders[user_id]
+        job.schedule_removal()
+
+    # Планируем новое ежедневное напоминание
+    job = context.job_queue.run_daily(
+        send_daily_reminder,
+        reminder_time_obj,
+        context={'user_id': user_id},
+        name=str(user_id)
+    )
+    scheduled_reminders[user_id] = job
+
+    # Опционально: сохранить настройки в БД или файле для восстановления после рестарта
+    await update.message.reply_text(
+        "Напоминание установлено!",
+        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
+    )
     return ConversationHandler.END
 
 # ----------------------- Дополнительные команды -----------------------
