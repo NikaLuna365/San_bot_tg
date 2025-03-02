@@ -11,7 +11,7 @@ from telegram.ext import (
     filters, CallbackContext
 )
 
-# Импорт официального SDK для Gemini от Google
+# Импорт SDK для Gemini от Google
 from google.generativeai import GenerativeModel, configure, types
 
 # ----------------------- Настройка логирования -----------------------
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # ----------------------- Константы для вопросов -----------------------
 WEEKDAY_FIXED_QUESTIONS = {
-    0: [  # Понедельник
+    0: [
         "Оцените, насколько ваше самочувствие сегодня ближе к хорошему или плохому (при 1 – крайне плохое самочувствие, а 7 – превосходное самочувствие)",
         "Оцените, чувствуете ли вы себя сильным или слабым (при 1 – чрезвычайно слабым, а 7 – исключительно сильным)",
         "Оцените свою активность: насколько вы ощущаете себя пассивным или активным (при 1 – крайне пассивным, а 7 – исключительно активным)",
@@ -31,7 +31,7 @@ WEEKDAY_FIXED_QUESTIONS = {
         "Оцените ваше эмоциональное состояние: насколько вы чувствуете себя весёлым или грустным (при 1 – крайне грустным, а 7 – исключительно весёлым)",
         "Оцените ваше настроение: насколько оно ближе к хорошему или плохому (при 1 – очень плохое настроение, а 7 – прекрасное настроение)"
     ],
-    1: [  # Вторник
+    1: [
         "Оцените свою работоспособность: насколько вы чувствуете себя работоспособным или разбитым (при 1 – совершенно разбитым, а 7 – на пике работоспособности)",
         "Оцените уровень своих сил: чувствуете ли вы себя полным сил или обессиленным (при 1 – абсолютно обессиленным, а 7 – полон энергии)",
         "Оцените скорость ваших мыслей или действий: насколько вы ощущаете себя медлительным или быстрым (при 1 – крайне медлительным, а 7 – исключительно быстрым)",
@@ -39,7 +39,7 @@ WEEKDAY_FIXED_QUESTIONS = {
         "Оцените своё счастье: насколько вы ощущаете себя счастливым или несчастным (при 1 – крайне несчастным, а 7 – чрезвычайно счастливым)",
         "Оцените вашу жизнерадостность: насколько вы чувствуете себя жизнерадостным или мрачным (при 1 – полностью мрачным, а 7 – исключительно жизнерадостным)"
     ],
-    2: [  # Среда
+    2: [
         "Оцените, насколько вы чувствуете напряжение или расслабленность (при 1 – невероятно напряжённый, а 7 – совершенно расслабленный)",
         "Оцените ваше здоровье: ощущаете ли вы себя здоровым или больным (при 1 – крайне больным, а 7 – абсолютно здоровым)",
         "Оцените вашу вовлечённость: насколько вы чувствуете себя безучастным или увлечённым (при 1 – совершенно безучастным, а 7 – полностью увлечённым)",
@@ -47,7 +47,7 @@ WEEKDAY_FIXED_QUESTIONS = {
         "Оцените ваш эмоциональный подъем: насколько вы чувствуете восторг или уныние (при 1 – совершенно унылый, а 7 – безмерно восторженный)",
         "Оцените вашу радость: насколько вы чувствуете радость или печаль (при 1 – крайне печальный, а 7 – исключительно радостный)"
     ],
-    3: [  # Четверг
+    3: [
         "Оцените, насколько вы чувствуете себя отдохнувшим или усталым (при 1 – совершенно усталым, а 7 – полностью отдохнувшим)",
         "Оцените, насколько вы ощущаете свежесть или изнурённость (при 1 – абсолютно изнурённый, а 7 – исключительно свежий)",
         "Оцените уровень своей сонливости или возбуждения (при 1 – крайне сонливый, а 7 – невероятно возбуждённый)",
@@ -55,7 +55,7 @@ WEEKDAY_FIXED_QUESTIONS = {
         "Оцените ваше спокойствие: насколько вы чувствуете себя взволнованным или спокойным (при 1 – полностью взволнованным, а 7 – исключительно спокойным)",
         "Оцените ваш оптимизм: насколько вы чувствуете себя пессимистичным или оптимистичным (при 1 – крайне пессимистичным, а 7 – чрезвычайно оптимистичным)"
     ],
-    4: [  # Пятница
+    4: [
         "Оцените вашу выносливость: насколько вы чувствуете себя выносливым или утомляемым (при 1 – совершенно утомляемым, а 7 – исключительно выносливым)",
         "Оцените уровень вашей бодрости: насколько вы чувствуете себя бодрым или вялым (при 1 – крайне вялым, а 7 – полностью бодрым)",
         "Оцените способность соображать: насколько вам сложно или легко соображать (при 1 – соображать крайне трудно, а 7 – соображать очень легко)",
@@ -63,7 +63,7 @@ WEEKDAY_FIXED_QUESTIONS = {
         "Оцените вашу надежду: насколько вы чувствуете себя разочарованным или полным надежд (при 1 – полностью разочарованным, а 7 – полон надежд)",
         "Оцените ваше удовлетворение: насколько вы чувствуете себя недовольным или довольным (при 1 – абсолютно недовольным, а 7 – исключительно довольным)"
     ],
-    5: [  # Суббота
+    5: [
         "Оцените ваше бодрствование: насколько вы чувствуете себя сонным или бодрствующим (при 1 – крайне сонным, а 7 – совершенно бодрствующим)",
         "Оцените, насколько вы чувствуете себя напряжённым или расслабленным (при 1 – невероятно напряжённым, а 7 – абсолютно расслабленным)",
         "Оцените, насколько вы ощущаете свежесть или утомлённость (при 1 – совершенно утомлённый, а 7 – исключительно свежий)",
@@ -71,7 +71,7 @@ WEEKDAY_FIXED_QUESTIONS = {
         "Оцените уровень вашей энергии: насколько вы чувствуете себя вялым или энергичным (при 1 – чрезвычайно вялым, а 7 – исключительно энергичным)",
         "Оцените вашу решительность: насколько вы чувствуете себя колеблющимся или решительным (при 1 – совершенно колеблющимся, а 7 – исключительно решительным)"
     ],
-    6: [  # Воскресенье
+    6: [
         "Оцените, насколько вы чувствуете себя сосредоточенным или рассеянным (при 1 – невероятно рассеянный, а 7 – чрезвычайно сосредоточенный)",
         "Оцените, насколько вы чувствуете себя пассивным или деятельным (при 1 – полностью пассивным, а 7 – исключительно деятельным)",
         "Оцените ваш оптимизм: насколько вы чувствуете себя пессимистичным или оптимистичным (при 1 – крайне пессимистичным, а 7 – чрезвычайно оптимистичным)",
@@ -111,7 +111,6 @@ def build_fixed_keyboard() -> ReplyKeyboardMarkup:
 
 async def exit_to_main(update: Update, context: CallbackContext) -> int:
     context.user_data.clear()
-    # Объединяем сообщение об отмене и показ главного меню в один ответ
     main_menu_keyboard = [["Тест", "Ретроспектива"], ["Напоминание", "Помощь"]]
     reply_markup = ReplyKeyboardMarkup(main_menu_keyboard, resize_keyboard=True, one_time_keyboard=True)
     await update.message.reply_text(
@@ -132,8 +131,11 @@ def remaining_days_in_month() -> int:
 
 def save_reminder(user_id: int, reminder_time: str):
     reminder_file = os.path.join(REMINDER_DIR, "reminders.txt")
-    with open(reminder_file, "a", encoding="utf-8") as f:
-        f.write(f"{user_id}: {reminder_time}\n")
+    try:
+        with open(reminder_file, "a", encoding="utf-8") as f:
+            f.write(f"{user_id}: {reminder_time}\n")
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении напоминания: {e}")
 
 def build_gemini_prompt_for_test(fixed_questions: list, test_answers: dict) -> str:
     prompt = ("Вы профессиональный психолог с 10-летним стажем. Клиент прошёл ежедневный опрос.\n"
@@ -153,7 +155,6 @@ def build_gemini_prompt_for_test(fixed_questions: list, test_answers: dict) -> s
     logger.info(f"Промпт для теста:\n{prompt}")
     return prompt
 
-# Новый метод для формирования промпта при общении с ИИ-психологом.
 def build_followup_chat_prompt(user_message: str, chat_context: str) -> str:
     prompt = (
         "Вы — высококвалифицированный психолог с более чем десятилетним опытом работы, специализирующийся на клинической и консультативной психологии. "
@@ -270,16 +271,13 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
         await update.message.reply_text("Произошла ошибка при сохранении данных теста.")
         return ConversationHandler.END
 
-    # Сохраняем последние ответы для общения с ИИ
     context.user_data["last_test_answers"] = context.user_data.get("test_answers", {})
 
-    # Формируем промпт для теста и получаем анализ от Gemini API
     prompt = build_gemini_prompt_for_test(context.user_data.get("fixed_questions", []),
                                           context.user_data.get("test_answers", {}))
     gemini_response = await call_gemini_api(prompt)
     interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
 
-    # Вычисляем краткое резюме результатов опроса для последующего использования в качестве контекста.
     test_answers = context.user_data.get("test_answers", {})
     try:
         self_feeling = (int(test_answers.get("fixed_1")) + int(test_answers.get("fixed_2"))) / 2
@@ -289,7 +287,6 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
     except Exception as e:
         logger.error(f"Ошибка при формировании контекста опроса: {e}")
         chat_context = "Данные теста учтены."
-    # Сохраняем контекст для дальнейшей беседы
     context.user_data["chat_context"] = chat_context
 
     message = (
@@ -302,6 +299,7 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
         message,
         reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
     )
+    # Если запланирована ретроспектива, запускаем её
     if update.message.from_user.id in scheduled_retrospectives:
         scheduled_day = scheduled_retrospectives[update.message.from_user.id]
         today = datetime.now()
@@ -310,6 +308,22 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
         if today.weekday() >= scheduled_day and last_retro_week != current_week:
             await update.message.reply_text("Запущена запланированная ретроспектива:")
             await run_retrospective_now(update, context)
+    # Переход в состояние общения с ИИ
+    return GEMINI_CHAT
+
+# ----------------------- Новый обработчик: после теста -----------------------
+async def after_test_choice_handler(update: Update, context: CallbackContext) -> int:
+    """
+    Обрабатывает выбор пользователя после прохождения теста.
+    """
+    user_input = update.message.text.strip()
+    if user_input.lower() == "главное меню":
+        return await exit_to_main(update, context)
+    # Здесь можно добавить логику обработки выбора пользователя.
+    await update.message.reply_text(
+        "Вы выбрали дальнейшее действие после теста. (Функциональность ещё не реализована, переходим к чату с ИИ.)",
+        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
+    )
     return GEMINI_CHAT
 
 # ----------------------- Обработчик общения с ИИ-психологом -----------------------
@@ -317,7 +331,6 @@ async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
     user_input = update.message.text.strip()
     if user_input.lower() == "главное меню":
         return await exit_to_main(update, context)
-    # Используем сохранённый контекст из результатов опроса
     chat_context = context.user_data.get("chat_context", "")
     prompt = build_followup_chat_prompt(user_input, chat_context)
     gemini_response = await call_gemini_api(prompt)
@@ -328,7 +341,29 @@ async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
     )
     return GEMINI_CHAT
 
-# ----------------------- Обработчики ретроспективы -----------------------
+# ----------------------- Функции для ретроспективы -----------------------
+def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
+    """
+    Формирует промпт для ретроспективного анализа.
+    """
+    prompt = f"Ретроспектива: за последнюю неделю проведено {test_count} тестов.\n"
+    prompt += "Средние показатели:\n"
+    for key, value in averages.items():
+        prompt += f"{key}: {value if value is not None else 'не указано'}\n"
+    prompt += "Пожалуйста, сформируйте аналитический отчет по динамике состояния клиента за неделю."
+    return prompt
+
+def build_gemini_prompt_for_retro_chat(user_message: str, week_overview: str) -> str:
+    """
+    Формирует промпт для обсуждения итогов ретроспективы.
+    """
+    prompt = (
+        "Анализ данных ретроспективы за последнюю неделю:\n" +
+        week_overview +
+        "\n\nВопрос клиента: " + user_message
+    )
+    return prompt
+
 async def retrospective_start(update: Update, context: CallbackContext) -> int:
     keyboard = [["Ретроспектива сейчас", "Запланировать ретроспективу", "Главное меню"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
