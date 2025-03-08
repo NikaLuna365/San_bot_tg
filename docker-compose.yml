@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   telegram-bot:
     build: .
@@ -24,4 +22,7 @@ services:
     volumes:
       - db_data:/var/lib/postgresql/data
     ports:
-      - "5433:5432"  # хостовой порт 5433 перенаправлен на контейнерный 5432
+      - "5433:5432"  # хостовой порт 5433 перенаправлен на порт 5432 контейнера
+
+volumes:
+  db_data:
