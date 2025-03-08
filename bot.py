@@ -647,7 +647,7 @@ async def main() -> None:
     app.add_handler(MessageHandler(filters.Regex("^(?i)главное меню$"), exit_to_main))
     app.add_error_handler(error_handler)
 
-    # Создаем пул соединений с БД
+    # Создаем пул соединений с БД и сохраняем его в bot_data
     db_pool = await db.create_db_pool()
     app.bot_data['db_pool'] = db_pool
 
@@ -655,7 +655,7 @@ async def main() -> None:
     app.job_queue.run_once(lambda ctx: asyncio.create_task(daily_reminder_scheduler(app, db_pool)), when=0)
     app.job_queue.run_once(lambda ctx: asyncio.create_task(weekly_retrospective_scheduler(app, db_pool)), when=0)
 
-    # Инициализация и запуск бота
+    # Асинхронная инициализация и запуск бота
     await app.initialize()
     await app.start_polling()
     await app.updater.idle()
