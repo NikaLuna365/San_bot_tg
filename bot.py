@@ -580,23 +580,24 @@ async def help_command(update: Update, context: CallbackContext) -> None:
 async def error_handler(update: object, context: CallbackContext) -> None:
     logger.error(f"Ошибка при обработке обновления {update}: {context.error}")
 
-# ----------------------- Асинхронная основная функция -----------------------
-async def main() -> None:
+# ----------------------- Основная функция -----------------------
+def main() -> None:
     TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     if not TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN не задан в переменных окружения.")
         return
 
+    # Создаем приложение (синхронно)
     app = Application.builder().token(TOKEN).build()
 
     # Если JobQueue не установлен, создаем его вручную
     if app.job_queue is None:
         from telegram.ext import JobQueue
         job_queue = JobQueue()
-        await job_queue.start()
+        job_queue.start()
         app.job_queue = job_queue
 
-    # Обработчик теста
+    # Добавляем обработчики
     test_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Тест$"), test_start)],
         states={
@@ -619,7 +620,6 @@ async def main() -> None:
     )
     app.add_handler(test_conv_handler)
 
-    # Обработчик ретроспективы
     retro_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Ретроспектива$"), retrospective_start)],
         states={
@@ -635,7 +635,6 @@ async def main() -> None:
     )
     app.add_handler(retro_conv_handler)
 
-    # Обработчик напоминаний
     reminder_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Напоминание$"), reminder_start)],
         states={
@@ -654,18 +653,16 @@ async def main() -> None:
     app.add_handler(MessageHandler(filters.Regex("^(?i)главное меню$"), exit_to_main))
     app.add_error_handler(error_handler)
 
-    # Создаем пул соединений с БД и сохраняем его в bot_data
-    db_pool = await db.create_db_pool()
+    # Создаем пул соединений с БД (асинхронная функция, вызываем через asyncio.run)
+    db_pool = asyncio.run(db.create_db_pool())
     app.bot_data['db_pool'] = db_pool
 
-    # Запуск фоновых задач для отправки напоминаний
+    # Запускаем фоновые задачи для отправки напоминаний
     app.job_queue.run_once(lambda ctx: asyncio.create_task(daily_reminder_scheduler(app, db_pool)), when=0)
     app.job_queue.run_once(lambda ctx: asyncio.create_task(weekly_retrospective_scheduler(app, db_pool)), when=0)
 
-    # Асинхронная инициализация и запуск бота
-    await app.initialize()
-    await app.start_polling()
-    await app.updater.idle()
+    # Запускаем бота синхронно
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
