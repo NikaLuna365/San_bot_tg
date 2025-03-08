@@ -589,6 +589,13 @@ async def main() -> None:
 
     app = Application.builder().token(TOKEN).build()
 
+    # Если JobQueue не установлен, создаем его вручную
+    if app.job_queue is None:
+        from telegram.ext import JobQueue
+        job_queue = JobQueue()
+        await job_queue.start()
+        app.job_queue = job_queue
+
     # Обработчик теста
     test_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Тест$"), test_start)],
