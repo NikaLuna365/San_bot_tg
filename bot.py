@@ -580,8 +580,8 @@ async def help_command(update: Update, context: CallbackContext) -> None:
 async def error_handler(update: object, context: CallbackContext) -> None:
     logger.error(f"Ошибка при обработке обновления {update}: {context.error}")
 
-# ----------------------- Основная функция -----------------------
-def main() -> None:
+# ----------------------- Асинхронная основная функция -----------------------
+async def main() -> None:
     TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     if not TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN не задан в переменных окружения.")
@@ -647,15 +647,18 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.Regex("^(?i)главное меню$"), exit_to_main))
     app.add_error_handler(error_handler)
 
-    # Создаём пул соединений с БД и сохраняем его в bot_data
-    db_pool = asyncio.run(db.create_db_pool())
+    # Создаем пул соединений с БД
+    db_pool = await db.create_db_pool()
     app.bot_data['db_pool'] = db_pool
 
     # Запуск фоновых задач для отправки напоминаний
     app.job_queue.run_once(lambda ctx: asyncio.create_task(daily_reminder_scheduler(app, db_pool)), when=0)
     app.job_queue.run_once(lambda ctx: asyncio.create_task(weekly_retrospective_scheduler(app, db_pool)), when=0)
 
-    app.run_polling()
+    # Инициализация и запуск бота
+    await app.initialize()
+    await app.start_polling()
+    await app.updater.idle()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
