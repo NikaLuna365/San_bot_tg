@@ -3,7 +3,7 @@ import json
 import logging
 import asyncio
 from calendar import monthrange
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
@@ -13,6 +13,9 @@ from telegram.ext import (
 
 # Импорт SDK для Gemini от Google
 from google.generativeai import GenerativeModel, configure, types
+
+# Импорт функций для работы с базой данных (файл db.py)
+import db
 
 # ----------------------- Настройка логирования -----------------------
 logging.basicConfig(
@@ -100,11 +103,7 @@ TEST_FIXED_1, TEST_FIXED_2, TEST_FIXED_3, TEST_FIXED_4, TEST_FIXED_5, TEST_FIXED
 RETRO_CHOICE, RETRO_SCHEDULE_DAY = range(8, 10)
 RETRO_CHAT = 10
 AFTER_TEST_CHOICE, GEMINI_CHAT = range(11, 13)
-REMINDER_CHOICE, REMINDER_DAILY_TIME, REMINDER_DAILY_REMIND = range(100, 103)
-
-scheduled_retrospectives = {}
-# Новый глобальный словарь для хранения запланированных напоминаний по user_id
-scheduled_reminders = {}
+REMINDER_CHOICE, REMINDER_DAILY_TIME, REMINDER_DAILY_REMIND, REMINDER_WEEKLY_DAY = range(100, 104)
 
 # ----------------------- Вспомогательные функции -----------------------
 def build_fixed_keyboard() -> ReplyKeyboardMarkup:
@@ -130,14 +129,6 @@ def remaining_days_in_month() -> int:
     today = datetime.now()
     _, last_day = monthrange(today.year, today.month)
     return last_day - today.day
-
-def save_reminder(user_id: int, reminder_time: str):
-    reminder_file = os.path.join(REMINDER_DIR, "reminders.txt")
-    try:
-        with open(reminder_file, "a", encoding="utf-8") as f:
-            f.write(f"{user_id}: {reminder_time}\n")
-    except Exception as e:
-        logger.error(f"Ошибка при сохранении напоминания: {e}")
 
 def build_gemini_prompt_for_test(fixed_questions: list, test_answers: dict) -> str:
     prompt = ("Вы профессиональный психолог с 10-летним стажем. Клиент прошёл ежедневный опрос.\n"
@@ -280,8 +271,8 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
     gemini_response = await call_gemini_api(prompt)
     interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
 
-    test_answers = context.user_data.get("test_answers", {})
     try:
+        test_answers = context.user_data.get("test_answers", {})
         self_feeling = (int(test_answers.get("fixed_1")) + int(test_answers.get("fixed_2"))) / 2
         activity = (int(test_answers.get("fixed_3")) + int(test_answers.get("fixed_4"))) / 2
         mood = (int(test_answers.get("fixed_5")) + int(test_answers.get("fixed_6"))) / 2
@@ -301,17 +292,8 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
         message,
         reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
     )
-    if update.message.from_user.id in scheduled_retrospectives:
-        scheduled_day = scheduled_retrospectives[update.message.from_user.id]
-        today = datetime.now()
-        current_week = today.isocalendar()[1]
-        last_retro_week = context.user_data.get("last_retrospective_week")
-        if today.weekday() >= scheduled_day and last_retro_week != current_week:
-            await update.message.reply_text("Запущена запланированная ретроспектива:")
-            await run_retrospective_now(update, context)
     return GEMINI_CHAT
 
-# ----------------------- Новый обработчик: после теста -----------------------
 async def after_test_choice_handler(update: Update, context: CallbackContext) -> int:
     user_input = update.message.text.strip()
     if user_input.lower() == "главное меню":
@@ -322,7 +304,6 @@ async def after_test_choice_handler(update: Update, context: CallbackContext) ->
     )
     return GEMINI_CHAT
 
-# ----------------------- Обработчик общения с ИИ-психологом -----------------------
 async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
     user_input = update.message.text.strip()
     if user_input.lower() == "главное меню":
@@ -394,7 +375,11 @@ async def retrospective_schedule_day(update: Update, context: CallbackContext) -
         return RETRO_SCHEDULE_DAY
     day_number = days_mapping[day_text]
     user_id = update.message.from_user.id
-    scheduled_retrospectives[user_id] = day_number
+    pool = context.bot_data.get('db_pool')
+    if pool is None:
+        await update.message.reply_text("Ошибка подключения к БД.")
+        return ConversationHandler.END
+    await db.upsert_weekly_retrospective(pool, user_id, day_number)
     await update.message.reply_text(
         f"Ретроспектива запланирована на {update.message.text.strip()}. После нового теста в этот день ретроспектива будет выполнена автоматически.",
         reply_markup=ReplyKeyboardRemove()
@@ -473,68 +458,108 @@ async def retrospective_chat_handler(update: Update, context: CallbackContext) -
     )
     return RETRO_CHAT
 
-# ----------------------- Обработчики раздела "Напоминание" -----------------------
+# ----------------------- Обработчики раздела "Напоминание" с использованием БД -----------------------
 async def reminder_start(update: Update, context: CallbackContext) -> int:
     keyboard = [["Ежедневный тест", "Ретроспектива"], ["Главное меню"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     await update.message.reply_text("Выберите тип напоминания:", reply_markup=reply_markup)
     return REMINDER_CHOICE
 
-async def reminder_daily_test(update: Update, context: CallbackContext) -> int:
+async def reminder_choice_handler(update: Update, context: CallbackContext) -> int:
     user_choice = update.message.text.strip().lower()
     if user_choice == "ежедневный тест":
-        await update.message.reply_text("Сколько у вас сейчас времени? (например, 15:30)")
-        return REMINDER_DAILY_TIME
+        await update.message.reply_text("Введите время в формате ЧЧ:ММ для напоминания о ежедневном тесте:")
+        return REMINDER_DAILY_REMIND
     elif user_choice == "ретроспектива":
-        await update.message.reply_text("Функция ретроспективы в разработке.")
-        return ConversationHandler.END
+        await update.message.reply_text("Введите день недели для ретроспективы (например, понедельник):")
+        return REMINDER_WEEKLY_DAY
     else:
         return await exit_to_main(update, context)
 
-async def reminder_receive_current_time(update: Update, context: CallbackContext) -> int:
-    current_time = update.message.text.strip()
-    context.user_data["current_time"] = current_time
-    await update.message.reply_text("Во сколько напоминать о ежедневном тесте? (например, 08:00)")
-    return REMINDER_DAILY_REMIND
-
-# Новый вариант реализации: функция отправки напоминания (используем data вместо context)
-async def send_daily_reminder(context: CallbackContext):
-    job_data = context.job.data
-    user_id = job_data['user_id']
-    await context.bot.send_message(chat_id=user_id, text="Напоминание: пришло время пройти ежедневный тест!")
-
-# Новый вариант реализации: установка ежедневного напоминания с использованием job_queue и data
 async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
     reminder_time_str = update.message.text.strip()  # ожидается формат "HH:MM"
     user_id = update.message.from_user.id
-
     try:
-        # Преобразуем строку времени в объект datetime.time
-        reminder_time_obj = datetime.strptime(reminder_time_str, "%H:%M").time()
+        datetime.strptime(reminder_time_str, "%H:%M")
     except ValueError:
-        await update.message.reply_text("Неверный формат времени. Пожалуйста, введите время в формате ЧЧ:ММ.")
-        return REMINDER_DAILY_REMIND  # возвращаемся к запросу времени
+        await update.message.reply_text("Неверный формат времени. Введите время в формате ЧЧ:ММ.")
+        return REMINDER_DAILY_REMIND
 
-    # Если у пользователя уже запланировано напоминание, отменяем его
-    if user_id in scheduled_reminders:
-        job = scheduled_reminders[user_id]
-        job.schedule_removal()
+    pool = context.bot_data.get('db_pool')
+    if pool is None:
+        await update.message.reply_text("Ошибка подключения к БД.")
+        return ConversationHandler.END
 
-    # Планируем новое ежедневное напоминание с использованием параметра data
-    job = context.job_queue.run_daily(
-        send_daily_reminder,
-        reminder_time_obj,
-        data={'user_id': user_id},
-        name=str(user_id)
-    )
-    scheduled_reminders[user_id] = job
-
-    # Опционально: сохранить настройки в БД или файле для восстановления после рестарта
+    await db.upsert_daily_reminder(pool, user_id, reminder_time_str)
     await update.message.reply_text(
-        "Напоминание установлено!",
+        "Напоминание о ежедневном тесте установлено!",
         reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
     )
     return ConversationHandler.END
+
+async def reminder_set_weekly(update: Update, context: CallbackContext) -> int:
+    day_text = update.message.text.strip().lower()
+    days_mapping = {
+        "понедельник": 0,
+        "вторник": 1,
+        "среда": 2,
+        "четверг": 3,
+        "пятница": 4,
+        "суббота": 5,
+        "воскресенье": 6
+    }
+    if day_text not in days_mapping:
+        await update.message.reply_text("Неверный ввод. Введите корректный день недели (например, понедельник).")
+        return REMINDER_WEEKLY_DAY
+    day_number = days_mapping[day_text]
+    user_id = update.message.from_user.id
+    pool = context.bot_data.get('db_pool')
+    if pool is None:
+        await update.message.reply_text("Ошибка подключения к БД.")
+        return ConversationHandler.END
+    await db.upsert_weekly_retrospective(pool, user_id, day_number)
+    await update.message.reply_text(
+        "Напоминание о ретроспективе установлено!",
+        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
+    )
+    return ConversationHandler.END
+
+# ----------------------- Фоновые задачи для отправки напоминаний -----------------------
+async def daily_reminder_scheduler(app, pool):
+    """Фоновая задача для отправки ежедневных напоминаний из БД."""
+    while True:
+        now = datetime.now().time()
+        reminders = await db.get_active_daily_reminders(pool)
+        for reminder in reminders:
+            if reminder["last_sent"] is None or reminder["last_sent"] < date.today():
+                if now >= reminder["reminder_time"]:
+                    try:
+                        await app.bot.send_message(
+                            chat_id=reminder["user_id"],
+                            text="Напоминание: пора пройти ежедневный тест!"
+                        )
+                        await db.update_last_sent_daily(pool, reminder["user_id"])
+                    except Exception as e:
+                        logger.error(f"Ошибка отправки напоминания пользователю {reminder['user_id']}: {e}")
+        await asyncio.sleep(60)
+
+async def weekly_retrospective_scheduler(app, pool):
+    """Фоновая задача для отправки напоминаний о ретроспективе из БД."""
+    while True:
+        now = datetime.now()
+        weekday = now.weekday()
+        reminders = await db.get_active_weekly_retrospectives(pool)
+        for reminder in reminders:
+            if reminder["retrospective_day"] == weekday and (reminder["last_sent"] is None or reminder["last_sent"] < date.today()):
+                try:
+                    await app.bot.send_message(
+                        chat_id=reminder["user_id"],
+                        text="Напоминание: сегодня день ретроспективы!"
+                    )
+                    await db.update_last_sent_weekly(pool, reminder["user_id"])
+                except Exception as e:
+                    logger.error(f"Ошибка отправки ретроспективного напоминания пользователю {reminder['user_id']}: {e}")
+        await asyncio.sleep(3600)
 
 # ----------------------- Дополнительные команды -----------------------
 async def help_command(update: Update, context: CallbackContext) -> None:
@@ -564,6 +589,7 @@ def main() -> None:
 
     app = Application.builder().token(TOKEN).build()
 
+    # Обработчик теста
     test_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Тест$"), test_start)],
         states={
@@ -586,6 +612,7 @@ def main() -> None:
     )
     app.add_handler(test_conv_handler)
 
+    # Обработчик ретроспективы
     retro_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Ретроспектива$"), retrospective_start)],
         states={
@@ -601,16 +628,15 @@ def main() -> None:
     )
     app.add_handler(retro_conv_handler)
 
+    # Обработчик напоминаний
     reminder_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Напоминание$"), reminder_start)],
         states={
-            REMINDER_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_daily_test)],
-            REMINDER_DAILY_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_receive_current_time)],
-            REMINDER_DAILY_REMIND: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_set_daily)]
+            REMINDER_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_choice_handler)],
+            REMINDER_DAILY_REMIND: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_set_daily)],
+            REMINDER_WEEKLY_DAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_set_weekly)]
         },
-        fallbacks=[
-            MessageHandler(filters.Regex("^(?i)главное меню$"), exit_to_main)
-        ],
+        fallbacks=[MessageHandler(filters.Regex("^(?i)главное меню$"), exit_to_main)],
         allow_reentry=True
     )
     app.add_handler(reminder_conv_handler)
@@ -618,11 +644,17 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(MessageHandler(filters.Regex("^Помощь$"), help_command))
-    
-    # Добавлен глобальный обработчик для команды "Главное меню"
     app.add_handler(MessageHandler(filters.Regex("^(?i)главное меню$"), exit_to_main))
-    
     app.add_error_handler(error_handler)
+
+    # Создаём пул соединений с БД и сохраняем его в bot_data
+    db_pool = asyncio.run(db.create_db_pool())
+    app.bot_data['db_pool'] = db_pool
+
+    # Запуск фоновых задач для отправки напоминаний
+    app.job_queue.run_once(lambda ctx: asyncio.create_task(daily_reminder_scheduler(app, db_pool)), when=0)
+    app.job_queue.run_once(lambda ctx: asyncio.create_task(weekly_retrospective_scheduler(app, db_pool)), when=0)
+
     app.run_polling()
 
 if __name__ == "__main__":
