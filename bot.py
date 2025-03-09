@@ -3,7 +3,7 @@ import json
 import logging
 import asyncio
 from calendar import monthrange
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
@@ -106,7 +106,6 @@ AFTER_TEST_CHOICE, GEMINI_CHAT = range(11, 13)
 REMINDER_CHOICE, REMINDER_DAILY_TIME, REMINDER_DAILY_REMIND = range(100, 103)
 
 scheduled_retrospectives = {}
-# Новый глобальный словарь для хранения запланированных напоминаний по user_id
 scheduled_reminders = {}
 
 # ----------------------- Вспомогательные функции -----------------------
@@ -314,7 +313,6 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
             await run_retrospective_now(update, context)
     return GEMINI_CHAT
 
-# ----------------------- Новый обработчик: после теста -----------------------
 async def after_test_choice_handler(update: Update, context: CallbackContext) -> int:
     user_input = update.message.text.strip()
     if user_input.lower() == "главное меню":
@@ -325,7 +323,6 @@ async def after_test_choice_handler(update: Update, context: CallbackContext) ->
     )
     return GEMINI_CHAT
 
-# ----------------------- Обработчик общения с ИИ-психологом -----------------------
 async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
     user_input = update.message.text.strip()
     if user_input.lower() == "главное меню":
@@ -500,30 +497,25 @@ async def reminder_receive_current_time(update: Update, context: CallbackContext
     await update.message.reply_text("Во сколько напоминать о ежедневном тесте? (например, 08:00)")
     return REMINDER_DAILY_REMIND
 
-# Новый вариант реализации: функция отправки напоминания (используем data вместо context)
 async def send_daily_reminder(context: CallbackContext):
     job_data = context.job.data
     user_id = job_data['user_id']
     await context.bot.send_message(chat_id=user_id, text="Напоминание: пришло время пройти ежедневный тест!")
 
-# Новый вариант реализации: установка ежедневного напоминания с использованием JobQueue, с сохранением настроек в БД
 async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
     reminder_time_str = update.message.text.strip()  # ожидается формат "HH:MM"
     user_id = update.message.from_user.id
 
     try:
-        # Преобразуем строку времени в объект datetime.time
         reminder_time_obj = datetime.strptime(reminder_time_str, "%H:%M").time()
     except ValueError:
         await update.message.reply_text("Неверный формат времени. Пожалуйста, введите время в формате ЧЧ:ММ.")
-        return REMINDER_DAILY_REMIND  # возвращаемся к запросу времени
+        return REMINDER_DAILY_REMIND
 
-    # Если у пользователя уже запланировано напоминание, отменяем его
     if user_id in scheduled_reminders:
         job = scheduled_reminders[user_id]
         job.schedule_removal()
 
-    # Сохраняем настройки напоминания в базе данных
     pool = context.bot_data.get("db_pool")
     try:
         await upsert_daily_reminder(pool, user_id, reminder_time_str)
@@ -532,7 +524,6 @@ async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
         await update.message.reply_text("Ошибка при сохранении напоминания. Попробуйте еще раз позже.")
         return ConversationHandler.END
 
-    # Планируем новое ежедневное напоминание с использованием параметра data
     job = context.job_queue.run_daily(
         send_daily_reminder,
         reminder_time_obj,
@@ -593,7 +584,6 @@ async def schedule_active_reminders(app: Application):
 
 # ----------------------- Основная функция -----------------------
 def main() -> None:
-    # Явно создаём и устанавливаем новый event loop для главного потока
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
@@ -602,9 +592,10 @@ def main() -> None:
         logger.error("TELEGRAM_BOT_TOKEN не задан в переменных окружения.")
         return
 
-    app = Application.builder().token(TOKEN).build()
+    # Используем ApplicationBuilder для установки post_init через .post_init()
+    app = Application.builder().token(TOKEN).post_init(schedule_active_reminders).build()
 
-    # Создаём пул соединений с PostgreSQL и сохраняем его в bot_data
+    # Создаем пул соединений с PostgreSQL и сохраняем его в bot_data
     pool = loop.run_until_complete(create_db_pool())
     app.bot_data["db_pool"] = pool
 
@@ -662,14 +653,11 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(MessageHandler(filters.Regex("^Помощь$"), help_command))
-    
-    # Добавлен глобальный обработчик для команды "Главное меню"
     app.add_handler(MessageHandler(filters.Regex("^(?i)главное меню$"), exit_to_main))
-    
     app.add_error_handler(error_handler)
     
-    # Запускаем polling с post_init, который запланирует активные напоминания из БД
-    app.run_polling(post_init=schedule_active_reminders)
+    # Запускаем polling – post_init будет вызван автоматически согласно настройке в билдере
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
