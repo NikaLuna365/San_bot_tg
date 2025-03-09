@@ -89,6 +89,14 @@ OPEN_QUESTIONS = [
     "8. Что больше всего повлияло на ваше состояние сегодня?"
 ]
 
+# Новые открытые вопросы для ретроспективы
+RETRO_OPEN_QUESTIONS = [
+    "Какие события на этой неделе больше всего повлияли на ваше общее состояние?",
+    "Какие факторы способствовали вашей продуктивности, а какие, наоборот, мешали?",
+    "Какие у вас были ожидания от этой недели, и насколько они оправдались?",
+    "Какие уроки вы вынесли из прошедшей недели, и как вы планируете использовать этот опыт в будущем?"
+]
+
 # ----------------------- Настройка директорий -----------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -102,6 +110,8 @@ os.chmod(REMINDER_DIR, 0o777)
 TEST_FIXED_1, TEST_FIXED_2, TEST_FIXED_3, TEST_FIXED_4, TEST_FIXED_5, TEST_FIXED_6, TEST_OPEN_1, TEST_OPEN_2 = range(8)
 RETRO_CHOICE, RETRO_SCHEDULE_DAY = range(8, 10)
 RETRO_CHAT = 10
+# Состояния для ретроспективных открытых вопросов: назначены уникальные номера (13-16)
+RETRO_OPEN_1, RETRO_OPEN_2, RETRO_OPEN_3, RETRO_OPEN_4 = range(13, 17)
 AFTER_TEST_CHOICE, GEMINI_CHAT = range(11, 13)
 REMINDER_CHOICE, REMINDER_DAILY_TIME, REMINDER_DAILY_REMIND = range(100, 103)
 
@@ -157,6 +167,19 @@ def build_gemini_prompt_for_test(fixed_questions: list, test_answers: dict) -> s
         answer = test_answers.get(key, "не указано")
         prompt += f"{len(fixed_questions)+j}. {question}\n   Ответ: {answer}\n"
     logger.info(f"Промпт для теста:\n{prompt}")
+    return prompt
+
+def build_gemini_prompt_for_retro(averages: dict, test_count: int, open_answers: dict) -> str:
+    prompt = f"Ретроспектива: за последнюю неделю проведено {test_count} тестов.\n"
+    prompt += "Средние показатели:\n"
+    for key, value in averages.items():
+        prompt += f"{key}: {value if value is not None else 'не указано'}\n"
+    prompt += "\nКачественный анализ:\n"
+    prompt += f"1. {RETRO_OPEN_QUESTIONS[0]}\n   Ответ: {open_answers.get('retro_open_1', 'не указано')}\n"
+    prompt += f"2. {RETRO_OPEN_QUESTIONS[1]}\n   Ответ: {open_answers.get('retro_open_2', 'не указано')}\n"
+    prompt += f"3. {RETRO_OPEN_QUESTIONS[2]}\n   Ответ: {open_answers.get('retro_open_3', 'не указано')}\n"
+    prompt += f"4. {RETRO_OPEN_QUESTIONS[3]}\n   Ответ: {open_answers.get('retro_open_4', 'не указано')}\n"
+    prompt += "\nПожалуйста, сформируйте аналитический отчет по динамике состояния клиента за неделю."
     return prompt
 
 def build_followup_chat_prompt(user_message: str, chat_context: str) -> str:
@@ -337,23 +360,7 @@ async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
     )
     return GEMINI_CHAT
 
-# ----------------------- Функции для ретроспективы -----------------------
-def build_gemini_prompt_for_retro(averages: dict, test_count: int) -> str:
-    prompt = f"Ретроспектива: за последнюю неделю проведено {test_count} тестов.\n"
-    prompt += "Средние показатели:\n"
-    for key, value in averages.items():
-        prompt += f"{key}: {value if value is not None else 'не указано'}\n"
-    prompt += "Пожалуйста, сформируйте аналитический отчет по динамике состояния клиента за неделю."
-    return prompt
-
-def build_gemini_prompt_for_retro_chat(user_message: str, week_overview: str) -> str:
-    prompt = (
-        "Анализ данных ретроспективы за последнюю неделю:\n" +
-        week_overview +
-        "\n\nВопрос клиента: " + user_message
-    )
-    return prompt
-
+# ----------------------- Обработчики ретроспективы -----------------------
 async def retrospective_start(update: Update, context: CallbackContext) -> int:
     keyboard = [["Ретроспектива сейчас", "Запланировать ретроспективу", "Главное меню"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
@@ -365,8 +372,12 @@ async def retrospective_choice_handler(update: Update, context: CallbackContext)
     if choice == "главное меню":
         return await exit_to_main(update, context)
     elif choice == "ретроспектива сейчас":
-        await run_retrospective_now(update, context)
-        return RETRO_CHAT
+        # Начинаем цепочку открытых вопросов для ретроспективы
+        await update.message.reply_text(
+            RETRO_OPEN_QUESTIONS[0],
+            reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
+        )
+        return RETRO_OPEN_1
     elif choice == "запланировать ретроспективу":
         days = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье", "Главное меню"]
         reply_markup = ReplyKeyboardMarkup([days], resize_keyboard=True, one_time_keyboard=True)
@@ -400,6 +411,49 @@ async def retrospective_schedule_day(update: Update, context: CallbackContext) -
         reply_markup=ReplyKeyboardRemove()
     )
     return ConversationHandler.END
+
+# Обработчики для ретроспективных открытых вопросов
+async def retro_open_1(update: Update, context: CallbackContext) -> int:
+    user_input = update.message.text.strip()
+    if user_input.lower() == "главное меню":
+        return await exit_to_main(update, context)
+    context.user_data["retro_open_1"] = user_input
+    await update.message.reply_text(
+        RETRO_OPEN_QUESTIONS[1],
+        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
+    )
+    return RETRO_OPEN_2
+
+async def retro_open_2(update: Update, context: CallbackContext) -> int:
+    user_input = update.message.text.strip()
+    if user_input.lower() == "главное меню":
+        return await exit_to_main(update, context)
+    context.user_data["retro_open_2"] = user_input
+    await update.message.reply_text(
+        RETRO_OPEN_QUESTIONS[2],
+        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
+    )
+    return RETRO_OPEN_3
+
+async def retro_open_3(update: Update, context: CallbackContext) -> int:
+    user_input = update.message.text.strip()
+    if user_input.lower() == "главное меню":
+        return await exit_to_main(update, context)
+    context.user_data["retro_open_3"] = user_input
+    await update.message.reply_text(
+        RETRO_OPEN_QUESTIONS[3],
+        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
+    )
+    return RETRO_OPEN_4
+
+async def retro_open_4(update: Update, context: CallbackContext) -> int:
+    user_input = update.message.text.strip()
+    if user_input.lower() == "главное меню":
+        return await exit_to_main(update, context)
+    context.user_data["retro_open_4"] = user_input
+    # После сбора ответов запускаем ретроспективу
+    await run_retrospective_now(update, context)
+    return RETRO_CHAT
 
 async def run_retrospective_now(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
@@ -446,11 +500,37 @@ async def run_retrospective_now(update: Update, context: CallbackContext):
         averages["Настроение"] = round((sums["fixed_5"]/counts["fixed_5"] + sums["fixed_6"]/counts["fixed_6"]) / 2, 2)
     else:
         averages["Настроение"] = None
-    prompt = build_gemini_prompt_for_retro(averages, len(tests))
+
+    # Собираем ответы на новые ретроспективные вопросы
+    open_answers = {
+        "retro_open_1": context.user_data.get("retro_open_1", "не указано"),
+        "retro_open_2": context.user_data.get("retro_open_2", "не указано"),
+        "retro_open_3": context.user_data.get("retro_open_3", "не указано"),
+        "retro_open_4": context.user_data.get("retro_open_4", "не указано")
+    }
+
+    prompt = build_gemini_prompt_for_retro(averages, len(tests), open_answers)
     gemini_response = await call_gemini_api(prompt)
     interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
     current_week = now.isocalendar()[1]
     context.user_data["last_retrospective_week"] = current_week
+
+    # Сохраняем данные ретроспективы в файл (расширенный JSON)
+    retro_filename = os.path.join(DATA_DIR, f"{user_id}_retro_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    retro_data = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "test_count": len(tests),
+        "averages": averages,
+        "open_answers": open_answers,
+        "interpretation": interpretation
+    }
+    try:
+        with open(retro_filename, "w", encoding="utf-8") as f:
+            json.dump(retro_data, f, ensure_ascii=False, indent=4)
+        logger.info(f"Данные ретроспективы сохранены в {retro_filename}")
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении данных ретроспективы: {e}")
+
     message = (
         f"Ретроспектива за последнюю неделю:\n{interpretation}\n\n"
         "Если хотите обсудить итоги недели, задайте свой вопрос.\n"
@@ -630,6 +710,10 @@ def main() -> None:
         states={
             RETRO_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, retrospective_choice_handler)],
             RETRO_SCHEDULE_DAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, retrospective_schedule_day)],
+            RETRO_OPEN_1: [MessageHandler(filters.TEXT & ~filters.COMMAND, retro_open_1)],
+            RETRO_OPEN_2: [MessageHandler(filters.TEXT & ~filters.COMMAND, retro_open_2)],
+            RETRO_OPEN_3: [MessageHandler(filters.TEXT & ~filters.COMMAND, retro_open_3)],
+            RETRO_OPEN_4: [MessageHandler(filters.TEXT & ~filters.COMMAND, retro_open_4)],
             RETRO_CHAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, retrospective_chat_handler)]
         },
         fallbacks=[
