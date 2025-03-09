@@ -14,6 +14,9 @@ from telegram.ext import (
 # Импорт SDK для Gemini от Google
 from google.generativeai import GenerativeModel, configure, types
 
+# Импорт функций для работы с PostgreSQL
+from db import create_db_pool, get_active_daily_reminders, upsert_daily_reminder
+
 # ----------------------- Настройка логирования -----------------------
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -503,7 +506,7 @@ async def send_daily_reminder(context: CallbackContext):
     user_id = job_data['user_id']
     await context.bot.send_message(chat_id=user_id, text="Напоминание: пришло время пройти ежедневный тест!")
 
-# Новый вариант реализации: установка ежедневного напоминания с использованием job_queue и data
+# Новый вариант реализации: установка ежедневного напоминания с использованием JobQueue, с сохранением настроек в БД
 async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
     reminder_time_str = update.message.text.strip()  # ожидается формат "HH:MM"
     user_id = update.message.from_user.id
@@ -520,6 +523,15 @@ async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
         job = scheduled_reminders[user_id]
         job.schedule_removal()
 
+    # Сохраняем настройки напоминания в базе данных
+    pool = context.bot_data.get("db_pool")
+    try:
+        await upsert_daily_reminder(pool, user_id, reminder_time_str)
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении напоминания в базе данных: {e}")
+        await update.message.reply_text("Ошибка при сохранении напоминания. Попробуйте еще раз позже.")
+        return ConversationHandler.END
+
     # Планируем новое ежедневное напоминание с использованием параметра data
     job = context.job_queue.run_daily(
         send_daily_reminder,
@@ -529,7 +541,6 @@ async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
     )
     scheduled_reminders[user_id] = job
 
-    # Опционально: сохранить настройки в БД или файле для восстановления после рестарта
     await update.message.reply_text(
         "Напоминание установлено!",
         reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
@@ -555,6 +566,31 @@ async def help_command(update: Update, context: CallbackContext) -> None:
 async def error_handler(update: object, context: CallbackContext) -> None:
     logger.error(f"Ошибка при обработке обновления {update}: {context.error}")
 
+# ----------------------- Функция для загрузки активных напоминаний из БД -----------------------
+async def schedule_active_reminders(app: Application):
+    pool = app.bot_data.get("db_pool")
+    try:
+        reminders = await get_active_daily_reminders(pool)
+        for r in reminders:
+            try:
+                reminder_time_obj = datetime.strptime(r["reminder_time"], "%H:%M").time()
+            except Exception as e:
+                logger.error(f"Ошибка преобразования времени ({r['reminder_time']}): {e}")
+                continue
+            user_id = r["user_id"]
+            if user_id in scheduled_reminders:
+                scheduled_reminders[user_id].schedule_removal()
+            job = app.job_queue.run_daily(
+                send_daily_reminder,
+                reminder_time_obj,
+                data={'user_id': user_id},
+                name=str(user_id)
+            )
+            scheduled_reminders[user_id] = job
+            logger.info(f"Напоминание для пользователя {user_id} запланировано на {r['reminder_time']}")
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке напоминаний из БД: {e}")
+
 # ----------------------- Основная функция -----------------------
 def main() -> None:
     # Явно создаём и устанавливаем новый event loop для главного потока
@@ -567,6 +603,10 @@ def main() -> None:
         return
 
     app = Application.builder().token(TOKEN).build()
+
+    # Создаём пул соединений с PostgreSQL и сохраняем его в bot_data
+    pool = loop.run_until_complete(create_db_pool())
+    app.bot_data["db_pool"] = pool
 
     test_conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Тест$"), test_start)],
@@ -627,7 +667,9 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.Regex("^(?i)главное меню$"), exit_to_main))
     
     app.add_error_handler(error_handler)
-    app.run_polling()
+    
+    # Запускаем polling с post_init, который запланирует активные напоминания из БД
+    app.run_polling(post_init=schedule_active_reminders)
 
 if __name__ == "__main__":
     main()
