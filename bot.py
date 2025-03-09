@@ -3,7 +3,7 @@ import json
 import logging
 import asyncio
 from calendar import monthrange
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, date
 
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
@@ -503,27 +503,31 @@ async def send_daily_reminder(context: CallbackContext):
     await context.bot.send_message(chat_id=user_id, text="Напоминание: пришло время пройти ежедневный тест!")
 
 async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
-    reminder_time_str = update.message.text.strip()  # ожидается формат "HH:MM"
+    reminder_time_str = update.message.text.strip()  # Ожидается формат "HH:MM"
     user_id = update.message.from_user.id
 
     try:
+        # Преобразуем строку в объект time
         reminder_time_obj = datetime.strptime(reminder_time_str, "%H:%M").time()
     except ValueError:
         await update.message.reply_text("Неверный формат времени. Пожалуйста, введите время в формате ЧЧ:ММ.")
         return REMINDER_DAILY_REMIND
 
+    # Если у пользователя уже запланировано напоминание, отменяем его
     if user_id in scheduled_reminders:
         job = scheduled_reminders[user_id]
         job.schedule_removal()
 
     pool = context.bot_data.get("db_pool")
     try:
-        await upsert_daily_reminder(pool, user_id, reminder_time_str)
+        # Передаем объект времени, а не строку
+        await upsert_daily_reminder(pool, user_id, reminder_time_obj)
     except Exception as e:
         logger.error(f"Ошибка при сохранении напоминания в базе данных: {e}")
         await update.message.reply_text("Ошибка при сохранении напоминания. Попробуйте еще раз позже.")
         return ConversationHandler.END
 
+    # Планируем новое ежедневное напоминание
     job = context.job_queue.run_daily(
         send_daily_reminder,
         reminder_time_obj,
@@ -564,7 +568,7 @@ async def schedule_active_reminders(app: Application):
         reminders = await get_active_daily_reminders(pool)
         for r in reminders:
             try:
-                reminder_time_obj = datetime.strptime(r["reminder_time"], "%H:%M").time()
+                reminder_time_obj = datetime.strptime(r["reminder_time"], "%H:%M:%S").time()
             except Exception as e:
                 logger.error(f"Ошибка преобразования времени ({r['reminder_time']}): {e}")
                 continue
@@ -592,7 +596,7 @@ def main() -> None:
         logger.error("TELEGRAM_BOT_TOKEN не задан в переменных окружения.")
         return
 
-    # Используем ApplicationBuilder для установки post_init через .post_init()
+    # Используем ApplicationBuilder с установкой post_init через .post_init()
     app = Application.builder().token(TOKEN).post_init(schedule_active_reminders).build()
 
     # Создаем пул соединений с PostgreSQL и сохраняем его в bot_data
