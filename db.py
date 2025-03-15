@@ -9,13 +9,16 @@ async def create_db_pool():
     return await asyncpg.create_pool(DATABASE_URL)
 
 # Работа с ежедневными напоминаниями
-async def upsert_daily_reminder(pool, user_id: int, reminder_time: str):
-    """Добавляет или обновляет напоминание о ежедневном тесте."""
+async def upsert_daily_reminder(pool, user_id: int, reminder_time):
+    """Добавляет или обновляет напоминание о ежедневном тесте.
+    
+    Параметр reminder_time приводится к типу TIME с помощью $2::time.
+    """
     async with pool.acquire() as conn:
         await conn.execute(
             """
             INSERT INTO daily_reminders (user_id, reminder_time, last_sent, active)
-            VALUES ($1, $2, NULL, true)
+            VALUES ($1, $2::time, NULL, true)
             ON CONFLICT (user_id) DO UPDATE 
             SET reminder_time = EXCLUDED.reminder_time, active = true
             """,
