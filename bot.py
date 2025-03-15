@@ -590,7 +590,7 @@ def main() -> None:
         logger.error("TELEGRAM_BOT_TOKEN не задан в переменных окружения.")
         return
     # Включаем загрузку запланированных ежедневных напоминаний и ретроспектив при старте
-    app = Application.builder().token(TOKEN).post_init(lambda app: (schedule_active_retrospectives(app), None))[0].build()
+    app = Application.builder().token(TOKEN).post_init(lambda app: (schedule_active_retrospectives(app), None)).build()
     pool = loop.run_until_complete(create_db_pool())
     app.bot_data["db_pool"] = pool
 
