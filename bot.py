@@ -396,15 +396,18 @@ async def retrospective_choice_handler(update: Update, context: CallbackContext)
         await update.message.reply_text("Пожалуйста, выберите один из предложенных вариантов.")
         return RETRO_CHOICE
 
-# Новый обработчик для выбора периода ретроспективы
+# Новый обработчик для выбора периода ретроспективы с доработкой
 async def retrospective_period_choice(update: Update, context: CallbackContext) -> int:
     period_choice = update.message.text.strip().lower()
+    logger.info(f"User selected retrospective period: {period_choice}")
+    
     if period_choice == "главное меню":
         return await exit_to_main(update, context)
-    elif period_choice == "ретроспектива за 1 неделю":
+    
+    if period_choice in ["ретроспектива за 1 неделю", "1 неделя", "1", "1 неделю"]:
         await update.message.reply_text("Формируется ретроспектива за последние 7 дней...")
         await run_retrospective_now(update, context, period_days=7)
-    elif period_choice == "ретроспектива за 2 недели":
+    elif period_choice in ["ретроспектива за 2 недели", "2 недели", "2 неделя", "2"]:
         await update.message.reply_text("Формируется ретроспектива за последние 14 дней...")
         await run_retrospective_now(update, context, period_days=14)
     else:
@@ -437,7 +440,6 @@ async def retrospective_schedule_day(update: Update, context: CallbackContext) -
     )
     return ConversationHandler.END
 
-# Обработчики для ретроспективных открытых вопросов
 async def retro_open_1(update: Update, context: CallbackContext) -> int:
     user_input = update.message.text.strip()
     if user_input.lower() == "главное меню":
@@ -614,6 +616,7 @@ async def send_daily_reminder(context: CallbackContext):
     user_id = job_data['user_id']
     await context.bot.send_message(chat_id=user_id, text="Напоминание: пришло время пройти ежедневный тест!")
 
+# Доработанная функция установки ежедневного напоминания
 async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
     reminder_time_str = update.message.text.strip()  # Ожидается формат "HH:MM"
     user_id = update.message.from_user.id
@@ -632,8 +635,9 @@ async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
 
     pool = context.bot_data.get("db_pool")
     try:
-        # Передаем объект времени, а не строку
-        await upsert_daily_reminder(pool, user_id, reminder_time_obj)
+        # Сохраняем время в формате "HH:MM:SS" для единообразия в БД
+        reminder_time_str_db = reminder_time_obj.strftime("%H:%M:%S")
+        await upsert_daily_reminder(pool, user_id, reminder_time_str_db)
     except Exception as e:
         logger.error(f"Ошибка при сохранении напоминания в базе данных: {e}")
         await update.message.reply_text("Ошибка при сохранении напоминания. Попробуйте еще раз позже.")
@@ -654,6 +658,35 @@ async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
     )
     return ConversationHandler.END
 
+# Доработанная функция загрузки активных напоминаний из БД
+async def schedule_active_reminders(app: Application):
+    pool = app.bot_data.get("db_pool")
+    try:
+        reminders = await get_active_daily_reminders(pool)
+        for r in reminders:
+            try:
+                # Если значение reminder_time – строка, парсим её; иначе используем напрямую
+                if isinstance(r["reminder_time"], str):
+                    reminder_time_obj = datetime.strptime(r["reminder_time"], "%H:%M:%S").time()
+                else:
+                    reminder_time_obj = r["reminder_time"]
+            except Exception as e:
+                logger.error(f"Ошибка преобразования времени ({r['reminder_time']}): {e}")
+                continue
+            user_id = r["user_id"]
+            if user_id in scheduled_reminders:
+                scheduled_reminders[user_id].schedule_removal()
+            job = app.job_queue.run_daily(
+                send_daily_reminder,
+                reminder_time_obj,
+                data={'user_id': user_id},
+                name=str(user_id)
+            )
+            scheduled_reminders[user_id] = job
+            logger.info(f"Напоминание для пользователя {user_id} запланировано на {r['reminder_time']}")
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке напоминаний из БД: {e}")
+
 # ----------------------- Дополнительные команды -----------------------
 async def help_command(update: Update, context: CallbackContext) -> None:
     help_text = (
@@ -672,31 +705,6 @@ async def help_command(update: Update, context: CallbackContext) -> None:
 
 async def error_handler(update: object, context: CallbackContext) -> None:
     logger.error(f"Ошибка при обработке обновления {update}: {context.error}")
-
-# ----------------------- Функция для загрузки активных напоминаний из БД -----------------------
-async def schedule_active_reminders(app: Application):
-    pool = app.bot_data.get("db_pool")
-    try:
-        reminders = await get_active_daily_reminders(pool)
-        for r in reminders:
-            try:
-                reminder_time_obj = datetime.strptime(r["reminder_time"], "%H:%M:%S").time()
-            except Exception as e:
-                logger.error(f"Ошибка преобразования времени ({r['reminder_time']}): {e}")
-                continue
-            user_id = r["user_id"]
-            if user_id in scheduled_reminders:
-                scheduled_reminders[user_id].schedule_removal()
-            job = app.job_queue.run_daily(
-                send_daily_reminder,
-                reminder_time_obj,
-                data={'user_id': user_id},
-                name=str(user_id)
-            )
-            scheduled_reminders[user_id] = job
-            logger.info(f"Напоминание для пользователя {user_id} запланировано на {r['reminder_time']}")
-    except Exception as e:
-        logger.error(f"Ошибка при загрузке напоминаний из БД: {e}")
 
 # ----------------------- Основная функция -----------------------
 def main() -> None:
