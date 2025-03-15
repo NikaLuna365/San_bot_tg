@@ -89,7 +89,6 @@ OPEN_QUESTIONS = [
     "8. Что больше всего повлияло на ваше состояние сегодня?"
 ]
 
-# Новые открытые вопросы для ретроспективы
 RETRO_OPEN_QUESTIONS = [
     "Какие события на этой неделе больше всего повлияли на ваше общее состояние?",
     "Какие факторы способствовали вашей продуктивности, а какие, наоборот, мешали?",
@@ -107,9 +106,7 @@ os.makedirs(REMINDER_DIR, exist_ok=True)
 os.chmod(REMINDER_DIR, 0o777)
 
 # ----------------------- Состояния для ConversationHandler -----------------------
-# Состояния для тестирования
 TEST_FIXED_1, TEST_FIXED_2, TEST_FIXED_3, TEST_FIXED_4, TEST_FIXED_5, TEST_FIXED_6, TEST_OPEN_1, TEST_OPEN_2 = range(8)
-# Состояния для ретроспективы (новые номера для избежания пересечений)
 RETRO_CHOICE = 8
 RETRO_PERIOD_CHOICE = 9
 RETRO_SCHEDULE_DAY = 10
@@ -118,7 +115,6 @@ RETRO_OPEN_2 = 12
 RETRO_OPEN_3 = 13
 RETRO_OPEN_4 = 14
 RETRO_CHAT = 15
-# Остальные состояния
 AFTER_TEST_CHOICE, GEMINI_CHAT = range(16, 18)
 REMINDER_CHOICE, REMINDER_DAILY_TIME, REMINDER_DAILY_REMIND = range(100, 103)
 
@@ -134,10 +130,7 @@ async def exit_to_main(update: Update, context: CallbackContext) -> int:
     context.user_data.clear()
     main_menu_keyboard = [["Тест", "Ретроспектива"], ["Напоминание", "Помощь"]]
     reply_markup = ReplyKeyboardMarkup(main_menu_keyboard, resize_keyboard=True, one_time_keyboard=True)
-    await update.message.reply_text(
-        "Возвращаемся в главное меню.\n\nДобро пожаловать! Выберите действие:",
-        reply_markup=reply_markup
-    )
+    await update.message.reply_text("Возвращаемся в главное меню.\n\nДобро пожаловать! Выберите действие:", reply_markup=reply_markup)
     return ConversationHandler.END
 
 async def start(update: Update, context: CallbackContext) -> None:
@@ -190,24 +183,19 @@ def build_gemini_prompt_for_retro(averages: dict, test_count: int, open_answers:
     return prompt
 
 def build_followup_chat_prompt(user_message: str, chat_context: str) -> str:
-    prompt = (
-        "Вы — высококвалифицированный психолог с более чем десятилетним стажем. "
-        "Обращайтесь к пользователю на «Вы». "
-        "Ваш профессионализм подкреплён глубокими академическими знаниями и практическим опытом. "
-        "Контекст теста: " + chat_context + "\n\n"
-        "Вопрос пользователя: " + user_message
-    )
+    prompt = ("Вы — высококвалифицированный психолог с более чем десятилетним стажем. "
+              "Обращайтесь к пользователю на «Вы». "
+              "Ваш профессионализм подкреплён глубокими академическими знаниями и практическим опытом. "
+              "Контекст теста: " + chat_context + "\n\n"
+              "Вопрос пользователя: " + user_message)
     return prompt
 
-# Новая функция для формирования промпта в ретроспективном чате
 def build_gemini_prompt_for_retro_chat(user_message: str, week_overview: str) -> str:
-    prompt = (
-        "Вы — высококвалифицированный психолог с более чем десятилетним стажем. "
-        "Обращайтесь к пользователю на «Вы». "
-        "Пожалуйста, отвечайте на вопросы, рассматривая их как отдельные аспекты анализа состояния клиента, без прямого упоминания ретроспективы. "
-        "Контекст анализа: " + week_overview + "\n\n"
-        "Вопрос пользователя: " + user_message
-    )
+    prompt = ("Вы — высококвалифицированный психолог с более чем десятилетним стажем. "
+              "Обращайтесь к пользователю на «Вы». "
+              "Пожалуйста, отвечайте на вопросы, рассматривая их как отдельные аспекты анализа состояния клиента, без прямого упоминания ретроспективы. "
+              "Контекст анализа: " + week_overview + "\n\n"
+              "Вопрос пользователя: " + user_message)
     return prompt
 
 async def call_gemini_api(prompt: str, max_tokens: int = 600) -> dict:
@@ -226,9 +214,7 @@ async def call_gemini_api(prompt: str, max_tokens: int = 600) -> dict:
             top_p=1.0,
             top_k=40
         )
-        response = await asyncio.to_thread(
-            lambda: model.generate_content([prompt], generation_config=gen_config)
-        )
+        response = await asyncio.to_thread(lambda: model.generate_content([prompt], generation_config=gen_config))
         logger.debug(f"Полный ответ от Gemini: {vars(response)}")
         if hasattr(response, "text") and response.text:
             interpretation = response.text
@@ -274,8 +260,7 @@ async def test_fixed_handler(update: Update, context: CallbackContext) -> int:
         await update.message.reply_text(fixed_questions[index], reply_markup=build_fixed_keyboard())
         return TEST_FIXED_1 + index
     else:
-        await update.message.reply_text(OPEN_QUESTIONS[0],
-                                        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
+        await update.message.reply_text(OPEN_QUESTIONS[0], reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
         return TEST_OPEN_1
 
 async def test_open_1(update: Update, context: CallbackContext) -> int:
@@ -283,8 +268,7 @@ async def test_open_1(update: Update, context: CallbackContext) -> int:
     if user_input.lower() == "главное меню":
         return await exit_to_main(update, context)
     context.user_data['test_answers']['open_1'] = user_input
-    await update.message.reply_text(OPEN_QUESTIONS[1],
-                                    reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
+    await update.message.reply_text(OPEN_QUESTIONS[1], reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
     return TEST_OPEN_2
 
 async def test_open_2(update: Update, context: CallbackContext) -> int:
@@ -310,8 +294,7 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
 
     context.user_data["last_test_answers"] = context.user_data.get("test_answers", {})
 
-    prompt = build_gemini_prompt_for_test(context.user_data.get("fixed_questions", []),
-                                          context.user_data.get("test_answers", {}))
+    prompt = build_gemini_prompt_for_test(context.user_data.get("fixed_questions", []), context.user_data.get("test_answers", {}))
     gemini_response = await call_gemini_api(prompt)
     interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
 
@@ -326,16 +309,10 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
         chat_context = "Данные теста учтены."
     context.user_data["chat_context"] = chat_context
 
-    message = (
-        f"Результат анализа:\n{interpretation}\n\n"
-        "Теперь вы можете общаться с ИИ-психологом по результатам теста. Отправляйте свои сообщения, "
-        "и они будут учитываться в рамках этого чата.\n"
-        "Для выхода в главное меню нажмите кнопку «Главное меню»."
-    )
-    await update.message.reply_text(
-        message,
-        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
-    )
+    message = (f"Результат анализа:\n{interpretation}\n\n"
+               "Теперь вы можете общаться с ИИ-психологом по результатам теста. Отправляйте свои сообщения, и они будут учитываться в рамках этого чата.\n"
+               "Для выхода в главное меню нажмите кнопку «Главное меню».")
+    await update.message.reply_text(message, reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
     if update.message.from_user.id in scheduled_retrospectives:
         scheduled_day = scheduled_retrospectives[update.message.from_user.id]
         today = datetime.now()
@@ -350,10 +327,8 @@ async def after_test_choice_handler(update: Update, context: CallbackContext) ->
     user_input = update.message.text.strip()
     if user_input.lower() == "главное меню":
         return await exit_to_main(update, context)
-    await update.message.reply_text(
-        "Вы выбрали дальнейшее действие после теста. (Функциональность ещё не реализована, переходим к чату с ИИ.)",
-        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
-    )
+    await update.message.reply_text("Вы выбрали дальнейшее действие после теста. (Функциональность ещё не реализована, переходим к чату с ИИ.)",
+                                      reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
     return GEMINI_CHAT
 
 async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
@@ -364,10 +339,7 @@ async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
     prompt = build_followup_chat_prompt(user_input, chat_context)
     gemini_response = await call_gemini_api(prompt)
     answer = gemini_response.get("interpretation", "Нет ответа от Gemini.")
-    await update.message.reply_text(
-        answer,
-        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
-    )
+    await update.message.reply_text(answer, reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
     return GEMINI_CHAT
 
 # ----------------------- Обработчики ретроспективы -----------------------
@@ -382,7 +354,6 @@ async def retrospective_choice_handler(update: Update, context: CallbackContext)
     if choice == "главное меню":
         return await exit_to_main(update, context)
     elif choice == "ретроспектива сейчас":
-        # Запрашиваем выбор периода ретроспективы
         keyboard = [["Ретроспектива за 1 неделю", "Ретроспектива за 2 недели"], ["Главное меню"]]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
         await update.message.reply_text("Выберите период ретроспективы:", reply_markup=reply_markup)
@@ -396,7 +367,6 @@ async def retrospective_choice_handler(update: Update, context: CallbackContext)
         await update.message.reply_text("Пожалуйста, выберите один из предложенных вариантов.")
         return RETRO_CHOICE
 
-# Новый обработчик для выбора периода ретроспективы с доработкой
 async def retrospective_period_choice(update: Update, context: CallbackContext) -> int:
     period_choice = update.message.text.strip().lower()
     logger.info(f"User selected retrospective period: {period_choice}")
@@ -434,10 +404,8 @@ async def retrospective_schedule_day(update: Update, context: CallbackContext) -
     day_number = days_mapping[day_text]
     user_id = update.message.from_user.id
     scheduled_retrospectives[user_id] = day_number
-    await update.message.reply_text(
-        f"Ретроспектива запланирована на {update.message.text.strip()}. После нового теста в этот день ретроспектива будет выполнена автоматически.",
-        reply_markup=ReplyKeyboardRemove()
-    )
+    await update.message.reply_text(f"Ретроспектива запланирована на {update.message.text.strip()}. После нового теста в этот день ретроспектива будет выполнена автоматически.",
+                                      reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
 async def retro_open_1(update: Update, context: CallbackContext) -> int:
@@ -445,10 +413,7 @@ async def retro_open_1(update: Update, context: CallbackContext) -> int:
     if user_input.lower() == "главное меню":
         return await exit_to_main(update, context)
     context.user_data["retro_open_1"] = user_input
-    await update.message.reply_text(
-        RETRO_OPEN_QUESTIONS[1],
-        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
-    )
+    await update.message.reply_text(RETRO_OPEN_QUESTIONS[1], reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
     return RETRO_OPEN_2
 
 async def retro_open_2(update: Update, context: CallbackContext) -> int:
@@ -456,10 +421,7 @@ async def retro_open_2(update: Update, context: CallbackContext) -> int:
     if user_input.lower() == "главное меню":
         return await exit_to_main(update, context)
     context.user_data["retro_open_2"] = user_input
-    await update.message.reply_text(
-        RETRO_OPEN_QUESTIONS[2],
-        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
-    )
+    await update.message.reply_text(RETRO_OPEN_QUESTIONS[2], reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
     return RETRO_OPEN_3
 
 async def retro_open_3(update: Update, context: CallbackContext) -> int:
@@ -467,10 +429,7 @@ async def retro_open_3(update: Update, context: CallbackContext) -> int:
     if user_input.lower() == "главное меню":
         return await exit_to_main(update, context)
     context.user_data["retro_open_3"] = user_input
-    await update.message.reply_text(
-        RETRO_OPEN_QUESTIONS[3],
-        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
-    )
+    await update.message.reply_text(RETRO_OPEN_QUESTIONS[3], reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
     return RETRO_OPEN_4
 
 async def retro_open_4(update: Update, context: CallbackContext) -> int:
@@ -478,8 +437,7 @@ async def retro_open_4(update: Update, context: CallbackContext) -> int:
     if user_input.lower() == "главное меню":
         return await exit_to_main(update, context)
     context.user_data["retro_open_4"] = user_input
-    # После сбора ответов запускаем ретроспективу
-    await run_retrospective_now(update, context, period_days=7)  # По умолчанию, если открытые вопросы заданы – используется 7-дневный анализ
+    await run_retrospective_now(update, context, period_days=7)
     return RETRO_CHAT
 
 async def run_retrospective_now(update: Update, context: CallbackContext, period_days: int = 7):
@@ -528,7 +486,6 @@ async def run_retrospective_now(update: Update, context: CallbackContext, period
     else:
         averages["Настроение"] = None
 
-    # Собираем ответы на новые ретроспективные вопросы
     open_answers = {
         "retro_open_1": context.user_data.get("retro_open_1", "не указано"),
         "retro_open_2": context.user_data.get("retro_open_2", "не указано"),
@@ -541,7 +498,6 @@ async def run_retrospective_now(update: Update, context: CallbackContext, period
     interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
     context.user_data["last_retrospective_week"] = now.isocalendar()[1]
 
-    # Сохраняем данные ретроспективы в файл (расширенный JSON)
     retro_filename = os.path.join(DATA_DIR, f"{user_id}_retro_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
     retro_data = {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -557,18 +513,15 @@ async def run_retrospective_now(update: Update, context: CallbackContext, period
         logger.info(f"Данные ретроспективы сохранены в {retro_filename}")
     except Exception as e:
         logger.exception("Ошибка при сохранении данных ретроспективы:")
-    # Формируем week_overview как агрегированный контекст для последующего общения
-    week_overview = f"Самочувствие: {averages.get('Самочувствие', 'не указано')}, " \
-                    f"Активность: {averages.get('Активность', 'не указано')}, " \
-                    f"Настроение: {averages.get('Настроение', 'не указано')}. " \
-                    "Ответы на качественные вопросы учтены."
+    week_overview = (f"Самочувствие: {averages.get('Самочувствие', 'не указано')}, "
+                     f"Активность: {averages.get('Активность', 'не указано')}, "
+                     f"Настроение: {averages.get('Настроение', 'не указано')}. "
+                     "Ответы на качественные вопросы учтены.")
     context.user_data["week_overview"] = week_overview
 
-    message = (
-        f"Ретроспектива за последние {period_days} дней:\n{interpretation}\n\n"
-        "Если хотите обсудить итоги периода, задайте свой вопрос.\n"
-        "Для выхода в главное меню нажмите кнопку «Главное меню»."
-    )
+    message = (f"Ретроспектива за последние {period_days} дней:\n{interpretation}\n\n"
+               "Если хотите обсудить итоги периода, задайте свой вопрос.\n"
+               "Для выхода в главное меню нажмите кнопку «Главное меню».")
     await update.message.reply_text(message, reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
     return RETRO_CHAT
 
@@ -580,10 +533,7 @@ async def retrospective_chat_handler(update: Update, context: CallbackContext) -
     prompt = build_gemini_prompt_for_retro_chat(user_input, week_overview)
     gemini_response = await call_gemini_api(prompt, max_tokens=600)
     answer = gemini_response.get("interpretation", "Нет ответа от Gemini.")
-    await update.message.reply_text(
-        answer,
-        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
-    )
+    await update.message.reply_text(answer, reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
     return RETRO_CHAT
 
 # ----------------------- Обработчики раздела "Напоминание" -----------------------
@@ -615,45 +565,68 @@ async def send_daily_reminder(context: CallbackContext):
     user_id = job_data['user_id']
     await context.bot.send_message(chat_id=user_id, text="Напоминание: пришло время пройти ежедневный тест!")
 
-# Улучшенная функция установки ежедневного напоминания
+# Улучшенная функция установки ежедневного напоминания с перерасчётом времени по часовому поясу пользователя
 async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
-    reminder_time_str = update.message.text.strip()  # Ожидается формат "HH:MM"
+    reminder_time_str = update.message.text.strip()  # Ожидается формат "HH:MM" (время напоминания по местному времени пользователя)
     user_id = update.message.from_user.id
 
     try:
-        # Преобразуем строку в объект time
-        reminder_time_obj = datetime.strptime(reminder_time_str, "%H:%M").time()
+        # Преобразуем введённое время напоминания в объект time
+        user_reminder_time_obj = datetime.strptime(reminder_time_str, "%H:%M").time()
     except ValueError:
         await update.message.reply_text("Неверный формат времени. Пожалуйста, введите время в формате ЧЧ:ММ.")
         return REMINDER_DAILY_REMIND
 
-    # Если у пользователя уже запланировано напоминание, отменяем его
+    # Получаем текущее время пользователя, которое он ввёл ранее
+    user_current_time_str = context.user_data.get("current_time")
+    if not user_current_time_str:
+        await update.message.reply_text("Не удалось определить ваше текущее время. Пожалуйста, попробуйте снова.")
+        return REMINDER_DAILY_REMIND
+
+    try:
+        user_current_time_obj = datetime.strptime(user_current_time_str, "%H:%M").time()
+    except ValueError:
+        await update.message.reply_text("Неверный формат вашего текущего времени. Пожалуйста, повторите ввод.")
+        return REMINDER_DAILY_REMIND
+
+    # Вычисляем смещение между временем сервера (UTC) и временем, которое сообщил пользователь.
+    server_now = datetime.utcnow()  # Время сервера в UTC
+    server_date = server_now.date()
+    user_current_datetime = datetime.combine(server_date, user_current_time_obj)
+    offset = server_now - user_current_datetime
+    logger.info(f"User reported current time: {user_current_time_obj}, server now: {server_now.time()}, offset: {offset}")
+
+    # Переводим время напоминания из локального времени пользователя в серверное время
+    user_reminder_datetime = datetime.combine(server_date, user_reminder_time_obj)
+    server_reminder_datetime = user_reminder_datetime + offset
+    # Если вычисленное время уже прошло, переносим на следующий день
+    if server_reminder_datetime <= server_now:
+        server_reminder_datetime += timedelta(days=1)
+    server_reminder_time_final = server_reminder_datetime.time()
+    logger.info(f"User desired reminder time: {user_reminder_time_obj}, scheduled server reminder time: {server_reminder_time_final}")
+
     if user_id in scheduled_reminders:
         job = scheduled_reminders[user_id]
         job.schedule_removal()
 
     pool = context.bot_data.get("db_pool")
     try:
-        # Передаём объект времени напрямую, ожидая, что SQL-запрос произведёт приведение к типу TIME (с помощью ::time)
-        await upsert_daily_reminder(pool, user_id, reminder_time_obj)
+        # Передаем вычисленное серверное время напоминания в функцию upsert (SQL-запрос приведёт его к типу TIME)
+        await upsert_daily_reminder(pool, user_id, server_reminder_time_final)
     except Exception as e:
         logger.exception("Ошибка при сохранении напоминания в базе данных:")
         await update.message.reply_text("Ошибка при сохранении напоминания. Попробуйте еще раз позже.")
         return ConversationHandler.END
 
-    # Планируем новое ежедневное напоминание
     job = context.job_queue.run_daily(
         send_daily_reminder,
-        reminder_time_obj,
+        server_reminder_time_final,
         data={'user_id': user_id},
         name=str(user_id)
     )
     scheduled_reminders[user_id] = job
 
-    await update.message.reply_text(
-        "Напоминание установлено!",
-        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
-    )
+    await update.message.reply_text("Напоминание установлено!", reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
     return ConversationHandler.END
 
 # Улучшенная функция загрузки активных напоминаний из БД
@@ -663,7 +636,6 @@ async def schedule_active_reminders(app: Application):
         reminders = await get_active_daily_reminders(pool)
         for r in reminders:
             try:
-                # Если значение reminder_time – строка, парсим её; иначе используем напрямую
                 if isinstance(r["reminder_time"], str):
                     reminder_time_obj = datetime.strptime(r["reminder_time"], "%H:%M:%S").time()
                 else:
@@ -696,10 +668,7 @@ async def help_command(update: Update, context: CallbackContext) -> None:
         "• Помощь – справочная информация.\n\n"
         "Во всех этапах работы доступна кнопка «Главное меню» для возврата в стартовое меню."
     )
-    await update.message.reply_text(
-        help_text,
-        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
-    )
+    await update.message.reply_text(help_text, reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
 
 async def error_handler(update: object, context: CallbackContext) -> None:
     logger.exception(f"Ошибка при обработке обновления {update}:")
@@ -714,10 +683,8 @@ def main() -> None:
         logger.error("TELEGRAM_BOT_TOKEN не задан в переменных окружения.")
         return
 
-    # Используем ApplicationBuilder с установкой post_init через .post_init()
     app = Application.builder().token(TOKEN).post_init(schedule_active_reminders).build()
 
-    # Создаем пул соединений с PostgreSQL и сохраняем его в bot_data
     pool = loop.run_until_complete(create_db_pool())
     app.bot_data["db_pool"] = pool
 
@@ -770,9 +737,7 @@ def main() -> None:
             REMINDER_DAILY_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_receive_current_time)],
             REMINDER_DAILY_REMIND: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder_set_daily)]
         },
-        fallbacks=[
-            MessageHandler(filters.Regex("^(?i)главное меню$"), exit_to_main)
-        ],
+        fallbacks=[MessageHandler(filters.Regex("^(?i)главное меню$"), exit_to_main)],
         allow_reentry=True
     )
     app.add_handler(reminder_conv_handler)
@@ -783,7 +748,6 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.Regex("^(?i)главное меню$"), exit_to_main))
     app.add_error_handler(error_handler)
     
-    # Запускаем polling – post_init будет вызван автоматически согласно настройке в билдере
     app.run_polling()
 
 if __name__ == "__main__":
