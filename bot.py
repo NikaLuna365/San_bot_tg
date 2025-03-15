@@ -343,42 +343,48 @@ async def gemini_chat_handler(update: Update, context: CallbackContext) -> int:
     return GEMINI_CHAT
 
 # ----------------------- Обработчики мгновенной ретроспективы -----------------------
-async def retrospective_start(update: Update, context: CallbackContext) -> int:
-    keyboard = [["Ретроспектива сейчас", "Запланировать ретроспективу", "Главное меню"]]
-    await update.message.reply_text("Выберите вариант ретроспективы:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True))
-    return RETRO_CHOICE
-
-async def retrospective_choice_handler(update: Update, context: CallbackContext) -> int:
-    choice = update.message.text.strip().lower()
-    if choice == "главное меню":
+async def retro_open_1(update: Update, context: CallbackContext) -> int:
+    user_input = update.message.text.strip()
+    if user_input.lower() == "главное меню":
         return await exit_to_main(update, context)
-    elif choice == "ретроспектива сейчас":
-        await update.message.reply_text("Выберите период ретроспективы: Ретроспектива за 1 неделю или за 2 недели.",
-                                        reply_markup=ReplyKeyboardMarkup([["Ретроспектива за 1 неделю", "Ретроспектива за 2 недели"], ["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
-        return RETRO_PERIOD_CHOICE
-    elif choice == "запланировать ретроспективу":
-        await update.message.reply_text("Введите день недели для запланированной ретроспективы (например, 'Понедельник'):",
-                                        reply_markup=ReplyKeyboardMarkup([["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье", "Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
-        return RETRO_SCHEDULE_DAY_NEW
-    else:
-        await update.message.reply_text("Пожалуйста, выберите один из предложенных вариантов.")
-        return RETRO_CHOICE
+    context.user_data["retro_open_1"] = user_input
+    await update.message.reply_text(
+        RETRO_OPEN_QUESTIONS[1],
+        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
+    )
+    return RETRO_OPEN_2
 
-async def retrospective_period_choice(update: Update, context: CallbackContext) -> int:
-    period_choice = update.message.text.strip().lower()
-    logger.info(f"User selected retrospective period: {period_choice}")
-    if period_choice == "главное меню":
+async def retro_open_2(update: Update, context: CallbackContext) -> int:
+    user_input = update.message.text.strip()
+    if user_input.lower() == "главное меню":
         return await exit_to_main(update, context)
-    if period_choice in ["ретроспектива за 1 неделю", "1 неделя", "1", "1 неделю"]:
-        await update.message.reply_text("Формируется ретроспектива за последние 7 дней...")
-        await run_retrospective_now(update, context, period_days=7)
-    elif period_choice in ["ретроспектива за 2 недели", "2 недели", "2", "2 неделя"]:
-        await update.message.reply_text("Формируется ретроспектива за последние 14 дней...")
-        await run_retrospective_now(update, context, period_days=14)
-    else:
-        await update.message.reply_text("Пожалуйста, выберите один из предложенных вариантов.")
-        return RETRO_PERIOD_CHOICE
+    context.user_data["retro_open_2"] = user_input
+    await update.message.reply_text(
+        RETRO_OPEN_QUESTIONS[2],
+        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
+    )
+    return RETRO_OPEN_3
+
+async def retro_open_3(update: Update, context: CallbackContext) -> int:
+    user_input = update.message.text.strip()
+    if user_input.lower() == "главное меню":
+        return await exit_to_main(update, context)
+    context.user_data["retro_open_3"] = user_input
+    await update.message.reply_text(
+        RETRO_OPEN_QUESTIONS[3],
+        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
+    )
+    return RETRO_OPEN_4
+
+async def retro_open_4(update: Update, context: CallbackContext) -> int:
+    user_input = update.message.text.strip()
+    if user_input.lower() == "главное меню":
+        return await exit_to_main(update, context)
+    context.user_data["retro_open_4"] = user_input
+    await update.message.reply_text("Запускается ретроспектива по результатам теста...")
+    await run_retrospective_now(update, context, period_days=7)
     return RETRO_CHAT
+
 
 # ----------------------- Новый диалог для запланированной ретроспективы -----------------------
 
