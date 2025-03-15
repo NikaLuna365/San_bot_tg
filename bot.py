@@ -23,7 +23,6 @@ from db import (
     upsert_scheduled_retrospective,
     get_active_scheduled_retrospectives,
     update_last_sent_scheduled_retrospective,
-    # оставляем и старые функции для еженедельной ретроспективы, если потребуется
     upsert_weekly_retrospective,
     get_active_weekly_retrospectives,
     update_last_sent_weekly
@@ -38,7 +37,6 @@ logger = logging.getLogger(__name__)
 
 # ----------------------- Константы для вопросов и состояний -----------------------
 
-# Существующие состояния для теста и ретроспективы
 WEEKDAY_FIXED_QUESTIONS = {
     0: [
         "Оцените, насколько ваше самочувствие сегодня ближе к хорошему или плохому (при 1 – крайне плохое самочувствие, а 7 – превосходное самочувствие)",
@@ -48,7 +46,7 @@ WEEKDAY_FIXED_QUESTIONS = {
         "Оцените ваше эмоциональное состояние: насколько вы чувствуете себя весёлым или грустным (при 1 – крайне грустным, а 7 – исключительно весёлым)",
         "Оцените ваше настроение: насколько оно ближе к хорошему или плохому (при 1 – очень плохое настроение, а 7 – прекрасное настроение)"
     ],
-    # Остальные дни...
+    # Можно добавить остальные дни аналогично...
 }
 OPEN_QUESTIONS = [
     "7. Какие три слова лучше всего описывают ваше текущее состояние?",
@@ -63,7 +61,7 @@ RETRO_OPEN_QUESTIONS = [
 
 # Состояния для теста
 TEST_FIXED_1, TEST_FIXED_2, TEST_FIXED_3, TEST_FIXED_4, TEST_FIXED_5, TEST_FIXED_6, TEST_OPEN_1, TEST_OPEN_2 = range(8)
-# Состояния для ретроспективы по результатам теста (немедленный запуск)
+# Состояния для ретроспективы (немедленная ретроспектива)
 RETRO_CHOICE = 8
 RETRO_PERIOD_CHOICE = 9
 RETRO_OPEN_1 = 10
@@ -74,8 +72,7 @@ RETRO_CHAT = 14
 AFTER_TEST_CHOICE, GEMINI_CHAT = range(15, 17)
 # Состояния для ежедневных напоминаний
 REMINDER_CHOICE, REMINDER_DAILY_TIME, REMINDER_DAILY_REMIND = range(100, 103)
-
-# Новые состояния для планирования ретроспективы (запланированная ретроспектива)
+# Новые состояния для планирования запланированной ретроспективы
 RETRO_SCHEDULE_DAY_NEW = 200
 RETRO_SCHEDULE_CURRENT = 201
 RETRO_SCHEDULE_TARGET = 202
@@ -83,7 +80,7 @@ RETRO_SCHEDULE_MODE = 203
 
 # ----------------------- Глобальные словари для запланированных задач -----------------------
 scheduled_reminders = {}         # Для ежедневных тестов
-scheduled_retrospectives = {}      # Для запланированных ретроспектив (хранение job_queue задач по user_id)
+scheduled_retrospectives = {}      # Для запланированных ретроспектив (job_queue задачи по user_id)
 
 # ----------------------- Вспомогательные функции -----------------------
 def build_fixed_keyboard() -> ReplyKeyboardMarkup:
@@ -196,7 +193,7 @@ async def call_gemini_api(prompt: str, max_tokens: int = 600) -> dict:
         logger.exception("Ошибка при вызове Gemini API:")
         return {"interpretation": "Ошибка при обращении к Gemini API."}
 
-# ----------------------- Обработчики теста (оставляем без изменений) -----------------------
+# ----------------------- Обработчики теста -----------------------
 async def test_cancel(update: Update, context: CallbackContext) -> int:
     await update.message.reply_text("Тест отменён.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
@@ -311,7 +308,6 @@ async def retrospective_choice_handler(update: Update, context: CallbackContext)
                                         reply_markup=ReplyKeyboardMarkup([["Ретроспектива за 1 неделю", "Ретроспектива за 2 недели"], ["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
         return RETRO_PERIOD_CHOICE
     elif choice == "запланировать ретроспективу":
-        # Переходим к новому диалогу планирования запланированной ретроспективы
         await update.message.reply_text("Введите день недели для запланированной ретроспективы (например, 'Понедельник'):",
                                         reply_markup=ReplyKeyboardMarkup([["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье", "Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
         return RETRO_SCHEDULE_DAY_NEW
@@ -335,7 +331,7 @@ async def retrospective_period_choice(update: Update, context: CallbackContext) 
         return RETRO_PERIOD_CHOICE
     return RETRO_CHAT
 
-# ----------------------- Новый диалог для планирования запланированной ретроспективы -----------------------
+# ----------------------- Обработчики запланированной ретроспективы -----------------------
 
 async def retro_schedule_day_handler(update: Update, context: CallbackContext) -> int:
     day_text = update.message.text.strip().lower()
@@ -396,8 +392,7 @@ async def retro_schedule_mode_handler(update: Update, context: CallbackContext) 
         return RETRO_SCHEDULE_MODE
     context.user_data["retro_mode"] = mode
 
-    # Теперь проведём расчёт времени.
-    # Получаем данные: пользовательский текущий и целевой времена
+    # Расчёт серверного времени ретроспективы
     try:
         user_current_time = datetime.strptime(context.user_data["retro_current_time"], "%H:%M").time()
         user_target_time = datetime.strptime(context.user_data["retro_target_time"], "%H:%M").time()
@@ -406,37 +401,34 @@ async def retro_schedule_mode_handler(update: Update, context: CallbackContext) 
         await update.message.reply_text("Ошибка в формате времени. Попробуйте ещё раз.")
         return ConversationHandler.END
 
-    # Вычисляем смещение: разница между серверным UTC временем и временем, которое сообщил пользователь.
-    server_now = datetime.utcnow()  # серверное время в UTC
+    server_now = datetime.utcnow()
     server_date = server_now.date()
     user_current_dt = datetime.combine(server_date, user_current_time)
     offset = server_now - user_current_dt
     logger.info(f"Пользователь сообщил текущее время {user_current_time}, серверное время {server_now.time()}, смещение: {offset}")
 
-    # Вычисляем желаемое серверное время ретроспективы: пользовательский target + offset
     user_target_dt = datetime.combine(server_date, user_target_time)
     computed_target_dt = user_target_dt + offset
 
-    # Теперь корректируем дату, чтобы оно соответствовало выбранному дню недели.
-    target_weekday = context.user_data["retro_schedule_day"]
+    # Функция для вычисления следующего вхождения указанного дня недели
     def get_next_occurrence(target_weekday, target_dt, current_dt):
-        days_ahead = target_weekday - target_dt.weekday()
+        days_ahead = context.user_data["retro_schedule_day"] - target_dt.weekday()
         if days_ahead < 0 or (days_ahead == 0 and target_dt <= current_dt):
             days_ahead += 7
         return target_dt + timedelta(days=days_ahead)
-    scheduled_dt = get_next_occurrence(target_weekday, computed_target_dt, server_now)
-    scheduled_time = scheduled_dt.time()
-    logger.info(f"Пользователь указал время ретроспективы {user_target_time}. Вычислено серверное время: {scheduled_time} для дня {target_weekday}")
 
-    # Сохраняем в БД данные запланированной ретроспективы
+    scheduled_dt = get_next_occurrence(context.user_data["retro_schedule_day"], computed_target_dt, server_now)
+    scheduled_time = scheduled_dt.time()
+    logger.info(f"Пользователь указал время ретроспективы {user_target_time}. Вычислено серверное время: {scheduled_time}")
+
     pool = context.bot_data.get("db_pool")
     try:
         await upsert_scheduled_retrospective(
             pool,
             update.message.from_user.id,
-            target_weekday,
-            user_target_time,  # локальное время
-            scheduled_time,    # серверное время
+            context.user_data["retro_schedule_day"],
+            user_target_time,  # локальное время ретроспективы
+            scheduled_time,    # вычисленное серверное время
             mode
         )
     except Exception as e:
@@ -444,16 +436,12 @@ async def retro_schedule_mode_handler(update: Update, context: CallbackContext) 
         await update.message.reply_text("Ошибка при сохранении ретроспективы. Попробуйте ещё раз позже.")
         return ConversationHandler.END
 
-    # Планируем задачу через job_queue.
-    # Вычисляем задержку до первого срабатывания:
+    # Планирование задачи через job_queue
     initial_delay = (scheduled_dt - server_now).total_seconds()
-    if mode == "weekly":
-        interval = 7 * 24 * 3600
-    else:
-        interval = 14 * 24 * 3600
+    interval = 7 * 24 * 3600 if mode == "weekly" else 14 * 24 * 3600
 
     job = context.job_queue.run_repeating(
-        send_daily_reminder,  # можно использовать другую callback-функцию для ретроспективы
+        send_daily_reminder,  # Для ретроспективы можно создать отдельную callback, но используем общую для примера
         interval=interval,
         first=initial_delay,
         data={'user_id': update.message.from_user.id, 'mode': mode},
@@ -484,7 +472,6 @@ async def schedule_active_retrospectives(app: Application):
                 logger.exception(f"Ошибка преобразования времени для ретроспективы (local: {r['local_time']}, server: {r['server_time']}):")
                 continue
             user_id = r["user_id"]
-            # Вычисляем начальное время для задачи
             server_now = datetime.utcnow()
             server_target_dt = datetime.combine(server_now.date(), server_time_obj)
             def get_next_occurrence(target_weekday, target_dt, current_dt):
@@ -499,7 +486,7 @@ async def schedule_active_retrospectives(app: Application):
             if user_id in scheduled_retrospectives:
                 scheduled_retrospectives[user_id].schedule_removal()
             job = app.job_queue.run_repeating(
-                send_daily_reminder,  # здесь можно использовать callback для ретроспективы
+                send_daily_reminder,
                 interval=interval,
                 first=initial_delay,
                 data={'user_id': user_id, 'mode': mode},
@@ -510,7 +497,7 @@ async def schedule_active_retrospectives(app: Application):
     except Exception as e:
         logger.exception("Ошибка при загрузке запланированных ретроспектив из БД:")
 
-# ----------------------- Обработчики раздела "Напоминание" (без изменений) -----------------------
+# ----------------------- Обработчики ежедневных напоминаний -----------------------
 async def reminder_start(update: Update, context: CallbackContext) -> int:
     keyboard = [["Ежедневный тест", "Ретроспектива"], ["Главное меню"]]
     await update.message.reply_text("Выберите тип напоминания:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True))
@@ -536,10 +523,203 @@ async def reminder_receive_current_time(update: Update, context: CallbackContext
 async def send_daily_reminder(context: CallbackContext):
     job_data = context.job.data
     user_id = job_data['user_id']
-    # Здесь можно добавить логику различения между ежедневными тестами и ретроспективой по данным job_data
     await context.bot.send_message(chat_id=user_id, text="Напоминание: пришло время пройти запланированную ретроспективу!")
 
-# ----------------------- Обработчик установки ежедневного напоминания (без изменений) -----------------------
+# ----------------------- Обработчик установки ежедневного напоминания -----------------------
+async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
+    reminder_time_str = update.message.text.strip()  # формат "HH:MM"
+    user_id = update.message.from_user.id
+    try:
+        reminder_time_obj = datetime.strptime(reminder_time_str, "%H:%M").time()
+    except ValueError:
+        await update.message.reply_text("Неверный формат времени. Пожалуйста, введите время в формате ЧЧ:ММ.")
+        return REMINDER_DAILY_REMIND
+    if user_id in scheduled_reminders:
+        scheduled_reminders[user_id].schedule_removal()
+    pool = context.bot_data.get("db_pool")
+    try:
+        await upsert_daily_reminder(pool, user_id, reminder_time_obj)
+    except Exception as e:
+        logger.exception("Ошибка при сохранении напоминания в БД:")
+        await update.message.reply_text("Ошибка при сохранении напоминания. Попробуйте еще раз позже.")
+        return ConversationHandler.END
+    job = context.job_queue.run_daily(
+        send_daily_reminder,
+        reminder_time_obj,
+        data={'user_id': user_id},
+        name=str(user_id)
+    )
+    scheduled_reminders[user_id] = job
+    await update.message.reply_text("Напоминание установлено!", reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
+    return ConversationHandler.END
+
+# ----------------------- Новые обработчики ретроспективы (немедленная ретроспектива) -----------------------
+async def retro_open_1(update: Update, context: CallbackContext) -> int:
+    user_input = update.message.text.strip()
+    if user_input.lower() == "главное меню":
+        return await exit_to_main(update, context)
+    context.user_data["retro_open_1"] = user_input
+    await update.message.reply_text(
+        RETRO_OPEN_QUESTIONS[1],
+        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
+    )
+    return RETRO_OPEN_2
+
+async def retro_open_2(update: Update, context: CallbackContext) -> int:
+    user_input = update.message.text.strip()
+    if user_input.lower() == "главное меню":
+        return await exit_to_main(update, context)
+    context.user_data["retro_open_2"] = user_input
+    await update.message.reply_text(
+        RETRO_OPEN_QUESTIONS[2],
+        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
+    )
+    return RETRO_OPEN_3
+
+async def retro_open_3(update: Update, context: CallbackContext) -> int:
+    user_input = update.message.text.strip()
+    if user_input.lower() == "главное меню":
+        return await exit_to_main(update, context)
+    context.user_data["retro_open_3"] = user_input
+    await update.message.reply_text(
+        RETRO_OPEN_QUESTIONS[3],
+        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
+    )
+    return RETRO_OPEN_4
+
+async def retro_open_4(update: Update, context: CallbackContext) -> int:
+    user_input = update.message.text.strip()
+    if user_input.lower() == "главное меню":
+        return await exit_to_main(update, context)
+    context.user_data["retro_open_4"] = user_input
+    await update.message.reply_text("Запускается ретроспектива по результатам теста...")
+    await run_retrospective_now(update, context, period_days=7)
+    return RETRO_CHAT
+
+async def run_retrospective_now(update: Update, context: CallbackContext, period_days: int = 7):
+    user_id = update.message.from_user.id
+    now = datetime.now()
+    period_start = now - timedelta(days=period_days)
+    user_files = [f for f in os.listdir("data") if f.startswith(f"{user_id}_") and f.endswith(".json")]
+    tests = []
+    for file in user_files:
+        file_path = os.path.join("data", file)
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                ts = datetime.strptime(data.get("timestamp", ""), "%Y-%m-%d %H:%M:%S")
+                if period_start <= ts <= now:
+                    tests.append(data)
+        except Exception as e:
+            logger.exception(f"Ошибка чтения файла {file_path}:")
+    if len(tests) < 4:
+        await update.message.reply_text(f"Недостаточно данных для ретроспективы за последние {period_days} дней. Пройдите тест минимум 4 раза за указанный период.",
+                                        reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
+        return
+    sums = {f"fixed_{i}": 0 for i in range(1, 7)}
+    counts = {f"fixed_{i}": 0 for i in range(1, 7)}
+    for test in tests:
+        answers = test.get("test_answers", {})
+        for i in range(1, 7):
+            key = f"fixed_{i}"
+            try:
+                val = int(answers.get(key))
+                sums[key] += val
+                counts[key] += 1
+            except (ValueError, TypeError):
+                continue
+    averages = {}
+    if counts["fixed_1"] and counts["fixed_2"]:
+        averages["Самочувствие"] = round((sums["fixed_1"]/counts["fixed_1"] + sums["fixed_2"]/counts["fixed_2"]) / 2, 2)
+    else:
+        averages["Самочувствие"] = None
+    if counts["fixed_3"] and counts["fixed_4"]:
+        averages["Активность"] = round((sums["fixed_3"]/counts["fixed_3"] + sums["fixed_4"]/counts["fixed_4"]) / 2, 2)
+    else:
+        averages["Активность"] = None
+    if counts["fixed_5"] and counts["fixed_6"]:
+        averages["Настроение"] = round((sums["fixed_5"]/counts["fixed_5"] + sums["fixed_6"]/counts["fixed_6"]) / 2, 2)
+    else:
+        averages["Настроение"] = None
+
+    open_answers = {
+        "retro_open_1": context.user_data.get("retro_open_1", "не указано"),
+        "retro_open_2": context.user_data.get("retro_open_2", "не указано"),
+        "retro_open_3": context.user_data.get("retro_open_3", "не указано"),
+        "retro_open_4": context.user_data.get("retro_open_4", "не указано")
+    }
+
+    prompt = build_gemini_prompt_for_retro(averages, len(tests), open_answers, period_days)
+    gemini_response = await call_gemini_api(prompt)
+    interpretation = gemini_response.get("interpretation", "Нет интерпретации.")
+    context.user_data["last_retrospective_week"] = now.isocalendar()[1]
+
+    retro_filename = os.path.join("data", f"{user_id}_retro_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    retro_data = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "test_count": len(tests),
+        "averages": averages,
+        "open_answers": open_answers,
+        "interpretation": interpretation,
+        "period_days": period_days
+    }
+    try:
+        with open(retro_filename, "w", encoding="utf-8") as f:
+            json.dump(retro_data, f, ensure_ascii=False, indent=4)
+        logger.info(f"Данные ретроспективы сохранены в {retro_filename}")
+    except Exception as e:
+        logger.exception("Ошибка при сохранении данных ретроспективы:")
+    week_overview = (f"Самочувствие: {averages.get('Самочувствие', 'не указано')}, "
+                     f"Активность: {averages.get('Активность', 'не указано')}, "
+                     f"Настроение: {averages.get('Настроение', 'не указано')}. "
+                     "Ответы на качественные вопросы учтены.")
+    context.user_data["week_overview"] = week_overview
+
+    message = (f"Ретроспектива за последние {period_days} дней:\n{interpretation}\n\n"
+               "Если хотите обсудить итоги периода, задайте свой вопрос.\n"
+               "Для выхода в главное меню нажмите кнопку «Главное меню».")
+    await update.message.reply_text(message, reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
+    return RETRO_CHAT
+
+async def retrospective_chat_handler(update: Update, context: CallbackContext) -> int:
+    if update.message.text.strip().lower() == "главное меню":
+        return await exit_to_main(update, context)
+    week_overview = context.user_data.get("week_overview", "")
+    prompt = build_gemini_prompt_for_retro_chat(update.message.text.strip(), week_overview)
+    gemini_response = await call_gemini_api(prompt, max_tokens=600)
+    answer = gemini_response.get("interpretation", "Нет ответа от Gemini.")
+    await update.message.reply_text(answer, reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
+    return RETRO_CHAT
+
+# ----------------------- Обработчики напоминаний (ежедневных тестов) -----------------------
+async def reminder_start(update: Update, context: CallbackContext) -> int:
+    keyboard = [["Ежедневный тест", "Ретроспектива"], ["Главное меню"]]
+    await update.message.reply_text("Выберите тип напоминания:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True))
+    return REMINDER_CHOICE
+
+async def reminder_daily_test(update: Update, context: CallbackContext) -> int:
+    user_choice = update.message.text.strip().lower()
+    if user_choice == "ежедневный тест":
+        await update.message.reply_text("Сколько у вас сейчас времени? (например, 15:30)")
+        return REMINDER_DAILY_TIME
+    elif user_choice == "ретроспектива":
+        await update.message.reply_text("Функция ретроспективы в разработке.")
+        return ConversationHandler.END
+    else:
+        return await exit_to_main(update, context)
+
+async def reminder_receive_current_time(update: Update, context: CallbackContext) -> int:
+    current_time = update.message.text.strip()
+    context.user_data["current_time"] = current_time
+    await update.message.reply_text("Во сколько напоминать о ежедневном тесте? (например, 08:00)")
+    return REMINDER_DAILY_REMIND
+
+async def send_daily_reminder(context: CallbackContext):
+    job_data = context.job.data
+    user_id = job_data['user_id']
+    await context.bot.send_message(chat_id=user_id, text="Напоминание: пришло время пройти запланированную ретроспективу!")
+
+# ----------------------- Обработчик установки ежедневного напоминания -----------------------
 async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
     reminder_time_str = update.message.text.strip()  # формат "HH:MM"
     user_id = update.message.from_user.id
@@ -569,13 +749,15 @@ async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
 
 # ----------------------- Дополнительные команды -----------------------
 async def help_command(update: Update, context: CallbackContext) -> None:
-    help_text = ("Наш бот предназначен для оценки вашего состояния с помощью короткого теста.\n\n"
-                 "Команды:\n"
-                 "• Тест – пройти тест (фиксированные вопросы, зависящие от дня недели, и 2 открытых вопроса).\n"
-                 "• Ретроспектива – анализ изменений за последний период (за 7 или 14 дней) и обсуждение итогов.\n"
-                 "• Напоминание – установить напоминание для прохождения теста.\n"
-                 "• Помощь – справочная информация.\n\n"
-                 "Во всех этапах работы доступна кнопка «Главное меню» для возврата в стартовое меню.")
+    help_text = (
+        "Наш бот предназначен для оценки вашего состояния с помощью короткого теста.\n\n"
+        "Команды:\n"
+        "• Тест – пройти тест (фиксированные вопросы, зависящие от дня недели, и 2 открытых вопроса).\n"
+        "• Ретроспектива – анализ изменений за последний период (за 7 или 14 дней) и обсуждение итогов.\n"
+        "• Напоминание – установить напоминание для прохождения теста.\n"
+        "• Помощь – справочная информация.\n\n"
+        "Во всех этапах работы доступна кнопка «Главное меню» для возврата в стартовое меню."
+    )
     await update.message.reply_text(help_text, reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
 
 async def error_handler(update: object, context: CallbackContext) -> None:
@@ -589,8 +771,8 @@ def main() -> None:
     if not TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN не задан в переменных окружения.")
         return
-    # Включаем загрузку запланированных ежедневных напоминаний и ретроспектив при старте
-    app = Application.builder().token(TOKEN).post_init(lambda app: (schedule_active_retrospectives(app), None)).build()
+    # Загружаем запланированные ретроспективы при старте
+    app = Application.builder().token(TOKEN).post_init(schedule_active_retrospectives).build()
     pool = loop.run_until_complete(create_db_pool())
     app.bot_data["db_pool"] = pool
 
@@ -623,8 +805,8 @@ def main() -> None:
         states={
             RETRO_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, retrospective_choice_handler)],
             RETRO_PERIOD_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, retrospective_period_choice)],
-            RETRO_OPEN_1: [MessageHandler(filters.TEXT & ~filters.COMMAND, test_open_1)],  # пример для немедленной ретроспективы
-            RETRO_OPEN_2: [MessageHandler(filters.TEXT & ~filters.COMMAND, test_open_2)],
+            RETRO_OPEN_1: [MessageHandler(filters.TEXT & ~filters.COMMAND, retro_open_1)],
+            RETRO_OPEN_2: [MessageHandler(filters.TEXT & ~filters.COMMAND, retro_open_2)],
             RETRO_OPEN_3: [MessageHandler(filters.TEXT & ~filters.COMMAND, retro_open_3)],
             RETRO_OPEN_4: [MessageHandler(filters.TEXT & ~filters.COMMAND, retro_open_4)],
             RETRO_CHAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, gemini_chat_handler)]
