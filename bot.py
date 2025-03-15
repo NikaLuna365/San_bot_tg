@@ -239,7 +239,7 @@ async def call_gemini_api(prompt: str, max_tokens: int = 600) -> dict:
         logger.info(f"Ответ от Gemini: {interpretation}")
         return {"interpretation": interpretation}
     except Exception as e:
-        logger.error(f"Ошибка при вызове Gemini API: {e}")
+        logger.exception("Ошибка при вызове Gemini API:")
         return {"interpretation": "Ошибка при обращении к Gemini API."}
 
 # ----------------------- Обработчики теста -----------------------
@@ -304,7 +304,7 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
             json.dump(test_data, f, ensure_ascii=False, indent=4)
         logger.info(f"Тестовые данные сохранены в {filename}")
     except Exception as e:
-        logger.error(f"Ошибка при сохранении теста: {e}")
+        logger.exception("Ошибка при сохранении теста:")
         await update.message.reply_text("Произошла ошибка при сохранении данных теста.")
         return ConversationHandler.END
 
@@ -322,7 +322,7 @@ async def test_open_2(update: Update, context: CallbackContext) -> int:
         mood = (int(test_answers.get("fixed_5")) + int(test_answers.get("fixed_6"))) / 2
         chat_context = f"Самочувствие: {self_feeling}, Активность: {activity}, Настроение: {mood}. Открытые ответы учтены."
     except Exception as e:
-        logger.error(f"Ошибка при формировании контекста опроса: {e}")
+        logger.exception("Ошибка при формировании контекста опроса:")
         chat_context = "Данные теста учтены."
     context.user_data["chat_context"] = chat_context
 
@@ -497,7 +497,7 @@ async def run_retrospective_now(update: Update, context: CallbackContext, period
                 if period_start <= ts <= now:
                     tests.append(data)
         except Exception as e:
-            logger.error(f"Ошибка чтения файла {file_path}: {e}")
+            logger.exception(f"Ошибка чтения файла {file_path}:")
     if len(tests) < 4:
         await update.message.reply_text(f"Недостаточно данных для ретроспективы за последние {period_days} дней. Пройдите тест минимум 4 раза за указанный период.",
                                         reply_markup=ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True))
@@ -556,8 +556,7 @@ async def run_retrospective_now(update: Update, context: CallbackContext, period
             json.dump(retro_data, f, ensure_ascii=False, indent=4)
         logger.info(f"Данные ретроспективы сохранены в {retro_filename}")
     except Exception as e:
-        logger.error(f"Ошибка при сохранении данных ретроспективы: {e}")
-
+        logger.exception("Ошибка при сохранении данных ретроспективы:")
     # Формируем week_overview как агрегированный контекст для последующего общения
     week_overview = f"Самочувствие: {averages.get('Самочувствие', 'не указано')}, " \
                     f"Активность: {averages.get('Активность', 'не указано')}, " \
@@ -616,7 +615,7 @@ async def send_daily_reminder(context: CallbackContext):
     user_id = job_data['user_id']
     await context.bot.send_message(chat_id=user_id, text="Напоминание: пришло время пройти ежедневный тест!")
 
-# Доработанная функция установки ежедневного напоминания
+# Улучшенная функция установки ежедневного напоминания
 async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
     reminder_time_str = update.message.text.strip()  # Ожидается формат "HH:MM"
     user_id = update.message.from_user.id
@@ -635,11 +634,10 @@ async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
 
     pool = context.bot_data.get("db_pool")
     try:
-        # Сохраняем время в формате "HH:MM:SS" для единообразия в БД
-        reminder_time_str_db = reminder_time_obj.strftime("%H:%M:%S")
-        await upsert_daily_reminder(pool, user_id, reminder_time_str_db)
+        # Передаём объект времени напрямую, ожидая, что SQL-запрос произведёт приведение к типу TIME (с помощью ::time)
+        await upsert_daily_reminder(pool, user_id, reminder_time_obj)
     except Exception as e:
-        logger.error(f"Ошибка при сохранении напоминания в базе данных: {e}")
+        logger.exception("Ошибка при сохранении напоминания в базе данных:")
         await update.message.reply_text("Ошибка при сохранении напоминания. Попробуйте еще раз позже.")
         return ConversationHandler.END
 
@@ -658,7 +656,7 @@ async def reminder_set_daily(update: Update, context: CallbackContext) -> int:
     )
     return ConversationHandler.END
 
-# Доработанная функция загрузки активных напоминаний из БД
+# Улучшенная функция загрузки активных напоминаний из БД
 async def schedule_active_reminders(app: Application):
     pool = app.bot_data.get("db_pool")
     try:
@@ -671,7 +669,7 @@ async def schedule_active_reminders(app: Application):
                 else:
                     reminder_time_obj = r["reminder_time"]
             except Exception as e:
-                logger.error(f"Ошибка преобразования времени ({r['reminder_time']}): {e}")
+                logger.exception(f"Ошибка преобразования времени ({r['reminder_time']}):")
                 continue
             user_id = r["user_id"]
             if user_id in scheduled_reminders:
@@ -685,7 +683,7 @@ async def schedule_active_reminders(app: Application):
             scheduled_reminders[user_id] = job
             logger.info(f"Напоминание для пользователя {user_id} запланировано на {r['reminder_time']}")
     except Exception as e:
-        logger.error(f"Ошибка при загрузке напоминаний из БД: {e}")
+        logger.exception("Ошибка при загрузке напоминаний из БД:")
 
 # ----------------------- Дополнительные команды -----------------------
 async def help_command(update: Update, context: CallbackContext) -> None:
@@ -704,7 +702,7 @@ async def help_command(update: Update, context: CallbackContext) -> None:
     )
 
 async def error_handler(update: object, context: CallbackContext) -> None:
-    logger.error(f"Ошибка при обработке обновления {update}: {context.error}")
+    logger.exception(f"Ошибка при обработке обновления {update}:")
 
 # ----------------------- Основная функция -----------------------
 def main() -> None:
