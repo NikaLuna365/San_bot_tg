@@ -7,8 +7,8 @@ ENV PYTHONUNBUFFERED=1
 # Устанавливаем рабочую директорию внутри контейнера
 WORKDIR /app
 
-# При необходимости можно установить системные зависимости (например, gcc)
-# RUN apt-get update && apt-get install -y gcc
+# Устанавливаем системные зависимости (например, gcc) и очищаем кэш apt
+RUN apt-get update && apt-get install -y gcc && rm -rf /var/lib/apt/lists/*
 
 # Копируем файл зависимостей и устанавливаем их
 COPY requirements.txt .
