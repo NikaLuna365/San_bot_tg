@@ -6,8 +6,9 @@ from typing import Any, Dict, List
 
 from google.generativeai import GenerativeModel, configure, types
 
+# --- ИЗМЕНЕНО: Абсолютный импорт ---
 # Импортируем тексты вопросов из констант
-from .constants import WEEKDAY_FIXED_QUESTIONS, OPEN_QUESTIONS, RETRO_OPEN_QUESTIONS
+from constants import WEEKDAY_FIXED_QUESTIONS, OPEN_QUESTIONS, RETRO_OPEN_QUESTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -15,12 +16,23 @@ logger = logging.getLogger(__name__)
 API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
     logger.warning("GEMINI_API_KEY не задан в переменных окружения. Функции AI не будут работать.")
-    configure(api_key="DUMMY_KEY") # Чтобы избежать ошибки при импорте, если ключ не задан
+    # Configure with dummy key to avoid errors during import if execution continues
+    try:
+        configure(api_key="DUMMY_KEY_NEEDS_REPLACEMENT")
+    except Exception as e:
+        logger.error(f"Failed to configure Gemini with dummy key: {e}")
+
 else:
-    configure(api_key=API_KEY)
+     try:
+        configure(api_key=API_KEY)
+        logger.info("Gemini API ключ успешно сконфигурирован.")
+     except Exception as e:
+        logger.error(f"Failed to configure Gemini with provided key: {e}")
+        API_KEY = None # Treat as if no key was provided
+
 
 # Выбор модели (можно вынести в .env)
-GEMINI_MODEL_NAME = "gemini-1.5-flash" # Используем новую модель
+GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash")
 
 
 def build_gemini_prompt_for_test(fixed_questions: List[str], test_answers: Dict[str, Any]) -> str:
@@ -129,15 +141,17 @@ async def call_gemini_api(prompt: str, max_tokens: int = 600) -> str:
         )
 
         # Используем asyncio.to_thread для неблокирующего вызова синхронной функции
+        # Передаем 'contents' как аргумент
         response = await asyncio.to_thread(
             model.generate_content,
-            contents=[prompt], # Передаем как список
+            contents=[prompt],
             generation_config=generation_config
         )
 
+
         logger.debug(f"Полный ответ от Gemini: {response}")
 
-        # Проверяем наличие текста в ответе
+        # Проверяем наличие текста в ответе, учитывая новую структуру ответа Gemini
         if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
              interpretation = "".join(part.text for part in response.candidates[0].content.parts)
              logger.info("Успешный ответ от Gemini получен.")
@@ -145,10 +159,20 @@ async def call_gemini_api(prompt: str, max_tokens: int = 600) -> str:
              return interpretation.strip()
         else:
              # Логируем причину отсутствия ответа, если она есть
-             block_reason = response.prompt_feedback.block_reason if response.prompt_feedback else "Неизвестно"
-             finish_reason = response.candidates[0].finish_reason if response.candidates else "Неизвестно"
+             block_reason = "N/A"
+             finish_reason = "N/A"
+             if hasattr(response, 'prompt_feedback') and response.prompt_feedback:
+                 block_reason = response.prompt_feedback.block_reason
+             if response.candidates and hasattr(response.candidates[0], 'finish_reason'):
+                  finish_reason = response.candidates[0].finish_reason
+
              logger.warning(f"Ответ от Gemini не содержит текста. Причина блокировки: {block_reason}, Причина завершения: {finish_reason}")
-             return "К сожалению, не удалось получить ответ от AI. Попробуйте переформулировать."
+             # Предоставляем более информативное сообщение об ошибке
+             if block_reason and block_reason != types.BlockReason.BLOCK_REASON_UNSPECIFIED:
+                 return f"Запрос к AI был заблокирован по причине: {block_reason}. Попробуйте переформулировать."
+             else:
+                 return "К сожалению, не удалось получить содержательный ответ от AI. Попробуйте позже."
+
 
     except Exception as e:
         logger.exception("Ошибка при вызове Gemini API:")
