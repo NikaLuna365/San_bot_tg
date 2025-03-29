@@ -10,8 +10,8 @@ from telegram.ext import ContextTypes, ConversationHandler
 from constants import State, REMINDER_TYPE_KEYBOARD, CANCEL_KEYBOARD, MAIN_MENU_KEYBOARD
 import db
 import scheduler
-# --- ИЗМЕНЕНО: Импортируем schedule для перехода к его диалогу ---
-import handlers.schedule as schedule_handlers
+# --- УБРАНО: Импорт schedule_handlers ---
+# import handlers.schedule as schedule_handlers
 
 from .common import exit_to_main
 
@@ -21,9 +21,8 @@ async def reminder_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Начинает диалог настройки напоминаний."""
     user_id = update.effective_user.id
     logger.info(f"Пользователь {user_id} вошел в меню напоминаний.")
-    # TODO: Добавить возможность просмотра/удаления существующих напоминаний
     await update.message.reply_text(
-        "О чем бы Вы хотели получать напоминания?", # Более дружелюбная формулировка
+        "О чем бы Вы хотели получать напоминания?",
         reply_markup=REMINDER_TYPE_KEYBOARD
     )
     return State.REMINDER_CHOICE
@@ -41,7 +40,6 @@ async def reminder_choice_handler(update: Update, context: ContextTypes.DEFAULT_
 
     if choice == "Ежедневный тест":
         logger.info(f"Пользователь {user_id} выбрал настройку ежедневного напоминания.")
-        # Проверяем, установлен ли часовой пояс
         user_tz_str = await db.get_user_timezone(pool, user_id)
         if not user_tz_str:
             await update.message.reply_text(
@@ -58,32 +56,16 @@ async def reminder_choice_handler(update: Update, context: ContextTypes.DEFAULT_
             )
             return State.REMINDER_DAILY_TIME
 
-    # --- ИЗМЕНЕНО: Обработка выбора "Запланированная ретроспектива" ---
+    # --- ИЗМЕНЕНО: Убран прямой переход, дается инструкция ---
     elif choice == "Запланированная ретроспектива":
         logger.info(f"Пользователь {user_id} выбрал настройку напоминания о ретроспективе.")
         await update.message.reply_text(
-            "Хорошо, давайте настроим расписание для ретроспективы.",
-            reply_markup=CANCEL_KEYBOARD # Даем возможность отменить переход
+            "Чтобы настроить или изменить расписание ретроспективы, пожалуйста, вернитесь в главное меню "
+            "и выберите 'Ретроспектива', а затем 'Запланировать'.",
+            # Можно добавить команду: "Или используйте команду /schedule.",
+            reply_markup=MAIN_MENU_KEYBOARD # Сразу возвращаем в главное меню
         )
-        # Запускаем диалог планирования ретроспективы
-        return await schedule_handlers.schedule_start(update, context)
-        # Важно: schedule_start должен возвращать начальное состояние
-        # своего ConversationHandler (например, State.SCHEDULE_DAY_NEW),
-        # и этот ConversationHandler должен быть зарегистрирован в main.py
-        # с точкой входа, которая не конфликтует (например, через отдельную команду
-        # или как здесь - переходом из другого хендлера).
-        # ВАЖНО: Этот способ перехода между ConversationHandler'ами может быть нестабилен
-        # и зависит от реализации PTB. Более надежный способ - завершить этот диалог (END)
-        # и попросить пользователя нажать кнопку "Ретроспектива" -> "Запланировать".
-        # Оставим пока так для эксперимента, но будьте готовы изменить.
-        # --- Альтернативный, более надежный вариант: ---
-        # await update.message.reply_text(
-        #     "Чтобы настроить запланированную ретроспективу, пожалуйста, "
-        #     "вернитесь в главное меню и выберите 'Ретроспектива' -> 'Запланировать'.",
-        #     reply_markup=MAIN_MENU_KEYBOARD
-        # )
-        # return ConversationHandler.END
-        # --- Конец альтернативного варианта ---
+        return ConversationHandler.END # Завершаем диалог напоминаний
 
     elif choice == "Главное меню":
         return await exit_to_main(update, context)
@@ -94,9 +76,9 @@ async def reminder_choice_handler(update: Update, context: ContextTypes.DEFAULT_
         )
         return State.REMINDER_CHOICE
 
-# Функция reminder_set_daily_time остается без изменений по сравнению с предыдущей версией
+# Функция reminder_set_daily_time остается без изменений
 async def reminder_set_daily_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State | int:
-    """Получает желаемое время, сохраняет настройки и планирует задачу."""
+    # ... (код без изменений) ...
     target_time_str = update.message.text.strip()
     user_id = update.effective_user.id
     pool = context.bot_data.get("db_pool")
