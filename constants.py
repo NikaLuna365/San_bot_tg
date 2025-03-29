@@ -31,7 +31,7 @@ class State(Enum):
     REMINDER_DAILY_TIME = auto()
 
     # Schedule Retrospective States
-    SCHEDULE_START = auto() # Точка входа для schedule_conv
+    SCHEDULE_START = auto() # Технически не используется как прямое состояние, но нужно для структуры
     SCHEDULE_DAY_NEW = auto()
     SCHEDULE_TARGET_TIME = auto()
     SCHEDULE_MODE = auto()
@@ -120,9 +120,9 @@ def build_fixed_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [[str(i) for i in range(1, 8)], ["Главное меню"]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
-# !!! ИЗМЕНЕНО: Добавлена кнопка "Настроить Расписание" !!!
+# !!! ИЗМЕНЕНО: Убрана кнопка "Настроить Расписание" !!!
 MAIN_MENU_KEYBOARD = ReplyKeyboardMarkup(
-    [["Тест", "Ретроспектива"], ["Напоминание", "Настроить Расписание"], ["Помощь", "Настроить часовой пояс"]],
+    [["Тест", "Ретроспектива"], ["Напоминание", "Помощь"], ["Настроить часовой пояс"]],
     resize_keyboard=True,
     one_time_keyboard=False
 )
@@ -131,15 +131,14 @@ CANCEL_KEYBOARD = ReplyKeyboardMarkup([["Главное меню"]], resize_keyb
 
 # RETRO_CHOICE_KEYBOARD больше не используется
 
-# !!! ИЗМЕНЕНО: Эта клавиатура теперь используется при старте ретроспективы !!!
 RETRO_NOW_PERIOD_KEYBOARD = ReplyKeyboardMarkup(
     [["За 1 неделю", "За 2 недели"], ["Главное меню"]],
      resize_keyboard=True, one_time_keyboard=True
 )
 
-# !!! ИЗМЕНЕНО: Убрана кнопка ретроспективы !!!
+# !!! ИЗМЕНЕНО: Возвращена кнопка "Запланированная ретроспектива" !!!
 REMINDER_TYPE_KEYBOARD = ReplyKeyboardMarkup(
-    [["Ежедневный тест"], ["Главное меню"]],
+    [["Ежедневный тест", "Запланированная ретроспектива"], ["Главное меню"]],
     resize_keyboard=True, one_time_keyboard=True
 )
 
