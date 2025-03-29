@@ -1,22 +1,24 @@
+# Dockerfile (обновленная версия)
 FROM python:3.10-slim
 
-# Отключаем запись байткода и включаем небуферизированный вывод
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Устанавливаем рабочую директорию внутри контейнера
 WORKDIR /app
 
-# Устанавливаем системные зависимости (например, gcc) и очищаем кэш apt
-RUN apt-get update && apt-get install -y gcc && rm -rf /var/lib/apt/lists/*
+# Устанавливаем системные зависимости (включая tzdata) и очищаем кэш apt
+# Если gcc не нужен, удалите 'gcc' из строки ниже
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata gcc && rm -rf /var/lib/apt/lists/*
+# Установка системного часового пояса (хорошая практика)
+ENV TZ=Etc/UTC
 
-# Копируем файл зависимостей и устанавливаем их
-COPY requirements.txt .
+# Эта строка выглядит подозрительно, возможно, ее можно удалить?
 RUN mkdir -p /app/reminder && chmod 777 /app/reminder
+
+COPY requirements.txt .
 RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
-# Копируем весь исходный код проекта в контейнер
 COPY . .
 
-# Команда для запуска бота
-CMD ["python", "bot.py"]
+# !!! ВАЖНО: Изменена команда запуска на main.py !!!
+CMD ["python", "main.py"]
