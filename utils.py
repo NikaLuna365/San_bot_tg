@@ -1,19 +1,35 @@
-# utils.py
-from datetime import datetime, timezone, date
-from calendar import monthrange
+# utils.py (добавить эту функцию)
+import re
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-def get_now_utc() -> datetime:
-    """Возвращает текущее время в UTC с информацией о часовом поясе."""
-    return datetime.now(timezone.utc)
-
-def get_today_utc() -> date:
-    """Возвращает текущую дату в UTC."""
-    return datetime.now(timezone.utc).date()
-
-def remaining_days_in_month() -> int:
-    """Возвращает количество оставшихся дней в текущем месяце."""
-    today = get_now_utc().date()
-    _, last_day = monthrange(today.year, today.month)
-    return last_day - today.day
-
-# Можно добавить другие утилиты, если понадобятся
+def parse_gmt_offset(tz_string: str) -> Optional[str]:
+    """Пытается распознать строку GMT/UTC смещения и вернуть каноническое имя Etc/GMT."""
+    tz_string = tz_string.upper().replace(" ", "") # Нормализуем ввод
+    # Ищем GMT+H, GMT-H, UTC+H, UTC-H (H - целое число от 0 до 14)
+    match = re.fullmatch(r"(?:GMT|UTC)([+-])(\d{1,2})", tz_string)
+    if match:
+        sign = match.group(1)
+        try:
+            offset = int(match.group(2))
+            if 0 <= offset <= 14:
+                # ВАЖНО: Знак в Etc/GMT инвертирован! GMT-3 -> Etc/GMT+3
+                etc_sign = "-" if sign == "+" else "+"
+                # Формируем имя для zoneinfo (Etc/GMT без знака для 0)
+                if offset == 0:
+                    return "Etc/GMT" # Или можно "Etc/UTC"
+                else:
+                    etc_tz_name = f"Etc/GMT{etc_sign}{offset}"
+                    # Проверяем, что такое имя существует
+                    try:
+                        _ = ZoneInfo(etc_tz_name)
+                        return etc_tz_name
+                    except ZoneInfoNotFoundError:
+                        logger.warning(f"Сгенерированное имя Etc/GMT '{etc_tz_name}' не найдено.")
+                        return None
+            else:
+                 # Смещение вне допустимого диапазона
+                 return None
+        except ValueError:
+            # Ошибка конвертации числа
+            return None
+    return None # Не соответствует формату GMT/UTC смещения
