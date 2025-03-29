@@ -6,6 +6,7 @@ from telegram import ReplyKeyboardMarkup
 # --- Состояния ConversationHandler ---
 # (Остаются без изменений)
 class State(Enum):
+    # Test States
     TEST_FIXED_1 = auto()
     TEST_FIXED_2 = auto()
     TEST_FIXED_3 = auto()
@@ -15,23 +16,32 @@ class State(Enum):
     TEST_OPEN_1 = auto()
     TEST_OPEN_2 = auto()
     GEMINI_CHAT_TEST = auto()
-    RETRO_CHOICE = auto() # Убрали кнопку Запланировать, это состояние больше не нужно
-    RETRO_PERIOD_CHOICE = auto()
+
+    # Retrospective States
+    # RETRO_CHOICE больше не используется
+    RETRO_PERIOD_CHOICE = auto() # Теперь это начальное состояние для retro_conv
     RETRO_OPEN_1 = auto()
     RETRO_OPEN_2 = auto()
     RETRO_OPEN_3 = auto()
     RETRO_OPEN_4 = auto()
     GEMINI_CHAT_RETRO = auto()
+
+    # Reminder States
     REMINDER_CHOICE = auto()
     REMINDER_DAILY_TIME = auto()
-    SCHEDULE_START = auto()
+
+    # Schedule Retrospective States
+    SCHEDULE_START = auto() # Точка входа для schedule_conv
     SCHEDULE_DAY_NEW = auto()
     SCHEDULE_TARGET_TIME = auto()
     SCHEDULE_MODE = auto()
-    SET_TIMEZONE_ASK = auto()
-# --- Тексты Вопросов ---
 
-# !!! ИЗМЕНЕНО: Обновлены вопросы для всех дней, убраны префиксы, исправлены дубликаты !!!
+    # Timezone State
+    SET_TIMEZONE_ASK = auto()
+
+
+# --- Тексты Вопросов ---
+# (Остаются без изменений по сравнению с предыдущей версией, с исправленными вопросами)
 WEEKDAY_FIXED_QUESTIONS = {
     0: [ # Понедельник
         "1. Оцените, насколько ваше самочувствие сегодня ближе к хорошему или плохому (при 1 – крайне плохое самочувствие, а 7 – превосходное самочувствие)",
@@ -79,7 +89,7 @@ WEEKDAY_FIXED_QUESTIONS = {
         "3. Оцените, насколько вы ощущаете свежесть или утомлённость (при 1 – совершенно утомлённый, а 7 – исключительно свежий)",
         "4. Оцените ваше здоровье: насколько вы ощущаете себя нездоровым или здоровым (при 1 – абсолютно нездоровым, а 7 – полностью здоровым)",
         "5. Оцените уровень вашей энергии: насколько вы чувствуете себя вялым или энергичным (при 1 – чрезвычайно вялым, а 7 – исключительно энергичным)",
-        "6. Оцените вашу решительность: насколько вы чувствуете себя колеблющимся или решительным (при 1 – совершенно колеблющимся, а 7 – исключительно решительным)", # Убрал дубль жизнерадостности
+        "6. Оцените вашу решительность: насколько вы чувствуете себя колеблющимся или решительным (при 1 – совершенно колеблющимся, а 7 – исключительно решительным)",
     ],
     6: [ # Воскресенье
         "1. Оцените, насколько вы чувствуете себя сосредоточенным или рассеянным (при 1 – невероятно рассеянный, а 7 – чрезвычайно сосредоточенный)",
@@ -91,9 +101,8 @@ WEEKDAY_FIXED_QUESTIONS = {
     ]
 }
 
-# !!! ИЗМЕНЕНО: Перефразирован первый открытый вопрос !!!
 OPEN_QUESTIONS = [
-    "7. Опишите тремя фразами ваше текущее состояние.",
+    "7. Опишите несколькими фразами ваше текущее состояние.",
     "8. Что больше всего повлияло на ваше состояние сегодня?",
 ]
 
@@ -107,32 +116,30 @@ RETRO_OPEN_QUESTIONS = [
 # --- Клавиатуры ---
 
 def build_fixed_keyboard() -> ReplyKeyboardMarkup:
+    """Создает клавиатуру для вопросов с оценкой 1-7."""
     keyboard = [[str(i) for i in range(1, 8)], ["Главное меню"]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
-# !!! ИЗМЕНЕНО: Добавлена кнопка "Запланировать Ретро" !!!
+# !!! ИЗМЕНЕНО: Добавлена кнопка "Настроить Расписание" !!!
 MAIN_MENU_KEYBOARD = ReplyKeyboardMarkup(
-    [
-        ["Тест", "Ретроспектива"],
-        ["Напоминание", "Запланировать Ретро"], # Заменили Помощь на планирование
-        ["Настроить часовой пояс", "Помощь"]   # Помощь перенесли
-    ],
+    [["Тест", "Ретроспектива"], ["Напоминание", "Настроить Расписание"], ["Помощь", "Настроить часовой пояс"]],
     resize_keyboard=True,
     one_time_keyboard=False
 )
 
 CANCEL_KEYBOARD = ReplyKeyboardMarkup([["Главное меню"]], resize_keyboard=True, one_time_keyboard=True)
 
-# !!! УДАЛЕНО: RETRO_CHOICE_KEYBOARD больше не нужна !!!
+# RETRO_CHOICE_KEYBOARD больше не используется
 
+# !!! ИЗМЕНЕНО: Эта клавиатура теперь используется при старте ретроспективы !!!
 RETRO_NOW_PERIOD_KEYBOARD = ReplyKeyboardMarkup(
     [["За 1 неделю", "За 2 недели"], ["Главное меню"]],
      resize_keyboard=True, one_time_keyboard=True
 )
 
-# !!! ИЗМЕНЕНО: Обновлена клавиатура напоминаний !!!
+# !!! ИЗМЕНЕНО: Убрана кнопка ретроспективы !!!
 REMINDER_TYPE_KEYBOARD = ReplyKeyboardMarkup(
-    [["Настроить ежедневный тест"], ["Настроить ретроспективу"], ["Главное меню"]], # Уточнили текст, добавили кнопку
+    [["Ежедневный тест"], ["Главное меню"]],
     resize_keyboard=True, one_time_keyboard=True
 )
 
@@ -147,8 +154,9 @@ SCHEDULE_MODE_KEYBOARD = ReplyKeyboardMarkup(
 )
 
 # --- Настройки ---
-# (Остаются без изменений)
 DATA_DIR = "data"
 LOGS_DIR = "logs"
+
+# Убедимся, что директории существуют
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
