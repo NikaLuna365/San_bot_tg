@@ -9,11 +9,11 @@ import aiofiles
 from telegram import Update, ReplyKeyboardRemove, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters
 
-# Импорты проекта
-from constants import ( # ИЗМЕНЕНО: Убрали RETRO_CHOICE_KEYBOARD
+# Импорты из проекта
+# !!! ИЗМЕНЕНО: Убрана RETRO_CHOICE_KEYBOARD, добавлена MAIN_MENU_KEYBOARD !!!
+from constants import (
     State, RETRO_OPEN_QUESTIONS, DATA_DIR,
-    RETRO_NOW_PERIOD_KEYBOARD, CANCEL_KEYBOARD,
-    MAIN_MENU_KEYBOARD
+    RETRO_NOW_PERIOD_KEYBOARD, CANCEL_KEYBOARD, MAIN_MENU_KEYBOARD
 )
 import gemini_client
 from utils import get_now_utc
@@ -23,46 +23,68 @@ logger = logging.getLogger(__name__)
 
 # --- Начало диалога ретроспективы ---
 
+# !!! ИЗМЕНЕНО: Функция теперь сразу предлагает выбор периода !!!
 async def retrospective_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
-    """Сразу предлагает выбор периода для мгновенной ретроспективы."""
+    """Начинает диалог мгновенной ретроспективы, спрашивая период."""
     user_id = update.effective_user.id
-    logger.info(f"Пользователь {user_id} вошел в меню ретроспективы (мгновенной).")
+    logger.info(f"Пользователь {user_id} начал мгновенную ретроспективу.")
     await update.message.reply_text(
-        "Ретроспектива помогает проанализировать динамику вашего состояния. "
-        "За какой период провести анализ?", # Сразу спрашиваем период
-        reply_markup=RETRO_NOW_PERIOD_KEYBOARD # Клавиатура выбора периода
+        "Ретроспектива помогает проанализировать динамику вашего состояния за прошедший период. "
+        "За какой период провести ретроспективу?",
+        reply_markup=RETRO_NOW_PERIOD_KEYBOARD # Сразу показываем выбор периода
     )
-    # !!! ИЗМЕНЕНО: Сразу переходим к выбору периода !!!
+    # Возвращаем состояние выбора периода как начальное для этого диалога
     return State.RETRO_PERIOD_CHOICE
 
+# !!! ИЗМЕНЕНО: Функция retrospective_choice_handler УДАЛЕНА, т.к. больше не нужна !!!
+# async def retrospective_choice_handler(...) -> State | int:
+#    ...
+
 # --- Логика мгновенной ретроспективы ---
-# Функции retrospective_period_choice, retro_open_handler, run_retrospective_analysis, retrospective_chat_handler
-# остаются БЕЗ ИЗМЕНЕНИЙ по сравнению с предыдущей версией кода (где были исправлены импорты).
-# ... (код этих функций как в предыдущем ответе) ...
 
-# --- Генерация состояний для открытых вопросов ---
-# Этот блок тоже остается БЕЗ ИЗМЕНЕНИЙ
-retro_open_states = {}
-for i in range(len(RETRO_OPEN_QUESTIONS)):
-    current_state_enum = State(State.RETRO_OPEN_1.value + i)
-    next_state_enum = State(State.RETRO_OPEN_1.value + i + 1) if i < len(RETRO_OPEN_QUESTIONS) - 1 else State.GEMINI_CHAT_RETRO
-    async def create_handler_wrapper(current_s, next_s):
-        async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State | int:
-            return await retro_open_handler(update, context, current_s, next_s)
-        return handler
-    retro_open_states[current_state_enum] = [
-        MessageHandler(filters.TEXT & ~filters.COMMAND, create_handler_wrapper(current_state_enum, next_state_enum))
-    ]
+# Функция retrospective_period_choice остается без изменений
+async def retrospective_period_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State | int:
+    """Обрабатывает выбор периода для мгновенной ретроспективы."""
+    choice = update.message.text.strip()
+    user_id = update.effective_user.id
+    period_days = 0
 
-# Остальные функции (run_retrospective_analysis, retrospective_chat_handler, retro_open_handler)
-# остаются такими же, как в предыдущем ответе (после исправления импортов)
+    if choice == "За 1 неделю":
+        period_days = 7
+    elif choice == "За 2 недели":
+        period_days = 14
+    elif choice == "Главное меню":
+        return await exit_to_main(update, context)
+    else:
+        await update.message.reply_text(
+            "Пожалуйста, выберите 'За 1 неделю' или 'За 2 недели'.",
+            reply_markup=RETRO_NOW_PERIOD_KEYBOARD
+        )
+        return State.RETRO_PERIOD_CHOICE
+
+    logger.info(f"Пользователь {user_id} выбрал ретроспективу за {period_days} дней.")
+    context.user_data["retro_period_days"] = period_days
+    context.user_data["retro_answers"] = {}
+
+    await update.message.reply_text(
+        f"Отлично. Теперь ответьте на несколько вопросов о прошедших {period_days} днях.\n\n"
+        f"{RETRO_OPEN_QUESTIONS[0]}",
+        reply_markup=CANCEL_KEYBOARD
+    )
+    return State.RETRO_OPEN_1
+
+# Функция retro_open_handler остается без изменений
 async def retro_open_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, current_state: State, next_state: State) -> State | int:
-    # ... (код без изменений)
+    """Общий обработчик для открытых вопросов ретроспективы."""
     user_input = update.message.text.strip()
     user_id = update.effective_user.id
     q_index = current_state.value - State.RETRO_OPEN_1.value
 
     if user_input == "Главное меню":
+        # !!! ИЗМЕНЕНО: Добавляем очистку временных данных при выходе !!!
+        context.user_data.pop("retro_period_days", None)
+        context.user_data.pop("retro_answers", None)
+        context.user_data.pop("retro_chat_context", None)
         return await exit_to_main(update, context)
 
     context.user_data["retro_answers"][f"retro_open_{q_index+1}"] = user_input
@@ -81,10 +103,28 @@ async def retro_open_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if success:
             return State.GEMINI_CHAT_RETRO
         else:
+            # Очищаем данные, если анализ не удался
+            context.user_data.pop("retro_period_days", None)
+            context.user_data.pop("retro_answers", None)
             return ConversationHandler.END
 
+# Генератор состояний retro_open_states остается без изменений
+retro_open_states = {}
+for i in range(len(RETRO_OPEN_QUESTIONS)):
+    current_state_enum = State(State.RETRO_OPEN_1.value + i)
+    next_state_enum = State(State.RETRO_OPEN_1.value + i + 1) if i < len(RETRO_OPEN_QUESTIONS) - 1 else State.GEMINI_CHAT_RETRO
+    async def create_handler_wrapper(current_s, next_s):
+        async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State | int:
+            return await retro_open_handler(update, context, current_s, next_s)
+        return handler
+    retro_open_states[current_state_enum] = [
+        MessageHandler(filters.TEXT & ~filters.COMMAND, create_handler_wrapper(current_state_enum, next_state_enum))
+    ]
+
+# Функция run_retrospective_analysis остается без изменений
 async def run_retrospective_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    # ... (код без изменений)
+    """Собирает данные тестов, рассчитывает средние, вызывает Gemini и отправляет результат.
+       Возвращает True при успехе, False при ошибке (например, мало данных)."""
     user_id = update.effective_user.id
     period_days = context.user_data.get("retro_period_days", 7)
     now = get_now_utc()
@@ -114,7 +154,7 @@ async def run_retrospective_analysis(update: Update, context: ContextTypes.DEFAU
                         if start_date <= ts_aware <= now:
                             test_answers = data.get("test_answers")
                             if isinstance(test_answers, dict): tests_in_period_answers.append(test_answers)
-                    except ValueError: logger.warning(f"Неверный формат timestamp '{ts_str}' в файле {filename}")
+                    except ValueError: logger.warning(f"Неверный формат timestamp '{ts_str}' в файле {filename}"); continue
         except Exception as e: logger.exception(f"Ошибка чтения или парсинга файла {filename}:")
 
     test_count = len(tests_in_period_answers)
@@ -138,11 +178,8 @@ async def run_retrospective_analysis(update: Update, context: ContextTypes.DEFAU
             key = f"fixed_{i}"
             try:
                 val_str = answers.get(key)
-                if isinstance(val_str, str): val = int(val_str)
-                elif isinstance(val_str, (int, float)): val = float(val_str)
-                else: continue
-                sums[key] += val
-                counts[key] += 1
+                if isinstance(val_str, str): sums[key] += int(val_str); counts[key] += 1
+                elif isinstance(val_str, (int, float)): sums[key] += float(val_str); counts[key] += 1
             except (ValueError, TypeError, KeyError): continue
 
     averages: Dict[str, Optional[float]] = {}
@@ -162,13 +199,12 @@ async def run_retrospective_analysis(update: Update, context: ContextTypes.DEFAU
     prompt = gemini_client.build_gemini_prompt_for_retro(averages, test_count, open_answers, period_days)
     interpretation = await gemini_client.call_gemini_api(prompt, max_tokens=800)
 
-    # --- Сохранение результатов ---
+    # --- Сохранение результатов ретроспективы ---
     retro_start_time: str = datetime.now().strftime("%Y%m%d_%H%M%S")
     retro_filename: str = os.path.join(DATA_DIR, f"retro_{user_id}_{retro_start_time}.json")
-    retro_data = { # ... (данные как раньше) ...
-        "user_id": user_id, "timestamp": datetime.now().isoformat(), "period_days": period_days,
-        "test_count": test_count, "averages": averages, "open_answers": open_answers,
-        "interpretation": interpretation
+    retro_data = {
+        "user_id": user_id,"timestamp": datetime.now().isoformat(),"period_days": period_days,
+        "test_count": test_count,"averages": averages,"open_answers": open_answers,"interpretation": interpretation
     }
     try:
         async with aiofiles.open(retro_filename, "w", encoding="utf-8") as f:
@@ -176,24 +212,31 @@ async def run_retrospective_analysis(update: Update, context: ContextTypes.DEFAU
         logger.info(f"Данные ретроспективы {user_id} сохранены в {retro_filename}")
     except Exception as e: logger.exception(f"Ошибка сохранения ретроспективы {user_id} в файл:")
 
-    # --- Контекст для чата ---
-    avg_str_parts = []
-    for key, val in averages.items(): avg_str_parts.append(f"{key}: {round(val, 1) if val is not None else 'N/A'}")
+    # --- Формирование контекста для чата ---
+    avg_str_parts = [f"{key}: {round(val, 1) if val is not None else 'N/A'}" for key, val in averages.items()]
     context.user_data["retro_chat_context"] = f"Период: {period_days} дн. Тестов: {test_count}. Средние: {', '.join(avg_str_parts)}."
 
     # --- Ответ пользователю ---
-    message = (f"📊 **Анализ ретроспективы за {period_days} дней:**\n\n{interpretation}\n\n-------\n"
-               "Вы можете задать уточняющие вопросы по этому анализу или поделиться своими мыслями.\n\n"
-               "Чтобы завершить, нажмите 'Главное меню'.")
+    message = (
+        f"📊 **Анализ ретроспективы за {period_days} дней:**\n\n{interpretation}\n\n"
+        "-------\n"
+        "Вы можете задать уточняющие вопросы по этому анализу или поделиться своими мыслями.\n\n"
+        "Чтобы завершить, нажмите 'Главное меню'."
+    )
     await update.message.reply_text(message, reply_markup=CANCEL_KEYBOARD, parse_mode='Markdown')
     return True
 
+# Функция retrospective_chat_handler остается без изменений
 async def retrospective_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State | int:
-    # ... (код без изменений)
+    """Обрабатывает сообщения пользователя в чате после ретроспективы."""
     user_input = update.message.text.strip()
     user_id = update.effective_user.id
 
     if user_input == "Главное меню":
+        # !!! ИЗМЕНЕНО: Добавляем очистку временных данных при выходе из чата !!!
+        context.user_data.pop("retro_period_days", None)
+        context.user_data.pop("retro_answers", None)
+        context.user_data.pop("retro_chat_context", None)
         return await exit_to_main(update, context)
 
     if "retro_chat_context" not in context.user_data:
