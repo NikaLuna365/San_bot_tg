@@ -3,8 +3,8 @@ import logging
 from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import ContextTypes, ConversationHandler
 
-# Импортируем общие ресурсы и состояния
-from .. import constants
+# --- ИЗМЕНЕНО: Абсолютный импорт ---
+from constants import MAIN_MENU_KEYBOARD
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Привет, {user.mention_html()}!\n\n"
         "Я помогу тебе отслеживать твое состояние и проводить рефлексию. "
         "Выбери действие:",
-        reply_markup=constants.MAIN_MENU_KEYBOARD
+        reply_markup=MAIN_MENU_KEYBOARD
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -29,10 +29,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "⏰ <b>Напоминание</b> – настрой ежедневное напоминание о прохождении теста.\n\n"
         "⚙️ <b>Настроить часовой пояс</b> (/set_timezone) – установи свой часовой пояс для корректной работы напоминаний.\n\n"
         "🆘 <b>Помощь</b> – отобразить это сообщение.\n\n"
-        " jederzeit доступна кнопка «Главное меню» для возврата." # jederzeit? Опечатка? Заменил на "В любой момент"
         "В любой момент доступна кнопка «Главное меню» для возврата."
     )
-    await update.message.reply_html(help_text, reply_markup=constants.MAIN_MENU_KEYBOARD)
+    await update.message.reply_html(help_text, reply_markup=MAIN_MENU_KEYBOARD)
 
 async def exit_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Завершает текущий диалог и возвращает в главное меню."""
@@ -42,7 +41,7 @@ async def exit_to_main(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     # context.user_data.clear()
     await update.message.reply_text(
         "Хорошо, возвращаемся в главное меню.",
-        reply_markup=constants.MAIN_MENU_KEYBOARD
+        reply_markup=MAIN_MENU_KEYBOARD
     )
     return ConversationHandler.END
 
@@ -52,7 +51,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.info(f"Пользователь {user_id} отменил текущую операцию.")
     await update.message.reply_text(
         "Операция отменена.",
-        reply_markup=constants.MAIN_MENU_KEYBOARD # Возвращаем главное меню
+        reply_markup=MAIN_MENU_KEYBOARD # Возвращаем главное меню
     )
     # context.user_data.clear() # Опционально
     return ConversationHandler.END
