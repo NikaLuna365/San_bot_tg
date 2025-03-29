@@ -1,3 +1,4 @@
+# docker-compose.yml (обновленная версия)
 services:
   telegram-bot:
     build: .
@@ -8,21 +9,42 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+      # Если вы используете PicklePersistence, можно добавить volume для него
+      - ./persistence:/app/persistence # Убедитесь, что путь в main.py для persistence совпадает (/app/bot_persistence.pickle)
     depends_on:
-      - db
+      db:
+        # Бот будет ждать, пока БД не станет 'healthy'
+        condition: service_healthy
+    # Можно добавить ограничения по ресурсам, если нужно
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '0.50'
+    #       memory: 512M
 
   db:
     image: postgres:13
     container_name: postgres
     restart: always
     environment:
-      POSTGRES_USER: username
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: dbname
+      # Эти переменные должны совпадать с DATABASE_URL в .env
+      POSTGRES_USER: username # Замените на ваше имя пользователя из DATABASE_URL
+      POSTGRES_PASSWORD: password # Замените на ваш пароль из DATABASE_URL
+      POSTGRES_DB: dbname # Замените на ваше имя БД из DATABASE_URL
     volumes:
       - db_data:/var/lib/postgresql/data
     ports:
-      - "5433:5432"  # хостовой порт 5433 перенаправлен на порт 5432 контейнера
+      - "5433:5432" # Оставляем как есть, если не мешает другим сервисам
+    # --- Добавлен Healthcheck ---
+    healthcheck:
+      # Проверяем готовность БД к приему соединений
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s # Даем время на первичный запуск Postgres
 
 volumes:
   db_data:
+# Если используете persistence для бота:
+  persistence: {}
