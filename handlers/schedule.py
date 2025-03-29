@@ -6,14 +6,15 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
 
-# Импорты проекта
-from ..constants import (
+# --- ИЗМЕНЕНО: Абсолютный импорт ---
+from constants import (
     State, SCHEDULE_DAYS_KEYBOARD, SCHEDULE_MODE_KEYBOARD,
     CANCEL_KEYBOARD, MAIN_MENU_KEYBOARD
 )
-from .. import db
-from .. import scheduler
+import db
+import scheduler
 
+# --- НЕ ИЗМЕНЕНО: Относительный импорт из той же папки ---
 from .common import exit_to_main
 
 logger = logging.getLogger(__name__)
@@ -28,13 +29,18 @@ DAYS_MAP_INT_TO_RU = {
     4: "Пятница", 5: "Суббота", 6: "Воскресенье"
 }
 
-async def schedule_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
+async def schedule_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State | int:
     """Начинает диалог планирования ретроспективы."""
     user_id = update.effective_user.id
     logger.info(f"Пользователь {user_id} начал планирование ретроспективы.")
 
     # Проверка часового пояса
-    pool = context.bot_data["db_pool"]
+    pool = context.bot_data.get("db_pool")
+    if not pool:
+         logger.error(f"DB pool not found in context for user {user_id} in schedule_start")
+         await update.message.reply_text("Ошибка: не удалось подключиться к базе данных.", reply_markup=MAIN_MENU_KEYBOARD)
+         return ConversationHandler.END
+
     user_tz_str = await db.get_user_timezone(pool, user_id)
     if not user_tz_str:
         await update.message.reply_text(
@@ -52,7 +58,7 @@ async def schedule_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return State.SCHEDULE_DAY_NEW
 
-async def schedule_day_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
+async def schedule_day_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State | int:
     """Обрабатывает выбор дня недели."""
     day_input = update.message.text.strip().lower()
     user_id = update.effective_user.id
@@ -82,7 +88,7 @@ async def schedule_day_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # Убрали состояния SCHEDULE_CURRENT_TIME, т.к. часовой пояс уже известен
 
-async def schedule_target_time_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
+async def schedule_target_time_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State | int:
     """Обрабатывает ввод целевого времени ретроспективы."""
     target_time_str = update.message.text.strip()
     user_id = update.effective_user.id
@@ -112,7 +118,12 @@ async def schedule_mode_handler(update: Update, context: ContextTypes.DEFAULT_TY
     """Обрабатывает выбор режима (еженедельно/двухнедельно), сохраняет и планирует."""
     mode_input = update.message.text.strip()
     user_id = update.effective_user.id
-    pool = context.bot_data["db_pool"]
+    pool = context.bot_data.get("db_pool")
+
+    if not pool:
+         logger.error(f"DB pool not found in context for user {user_id} in schedule_mode_handler")
+         await update.message.reply_text("Ошибка: не удалось подключиться к базе данных.", reply_markup=MAIN_MENU_KEYBOARD)
+         return ConversationHandler.END
 
     if mode_input == "Главное меню":
         return await exit_to_main(update, context)
@@ -142,6 +153,10 @@ async def schedule_mode_handler(update: Update, context: ContextTypes.DEFAULT_TY
             "Произошла внутренняя ошибка при сборе данных. Попробуйте начать сначала.",
             reply_markup=MAIN_MENU_KEYBOARD
         )
+        # Очищаем user_data на всякий случай
+        context.user_data.pop("schedule_day", None)
+        context.user_data.pop("schedule_target_time", None)
+        context.user_data.pop("schedule_timezone", None)
         return ConversationHandler.END
 
     try:
@@ -178,6 +193,10 @@ async def schedule_mode_handler(update: Update, context: ContextTypes.DEFAULT_TY
             f"Отлично! Ретроспектива запланирована на {day_name}, {time_str} ({user_tz_str}), {freq_str}.",
             reply_markup=MAIN_MENU_KEYBOARD
         )
+        # Очищаем временные данные из user_data
+        context.user_data.pop("schedule_day", None)
+        context.user_data.pop("schedule_target_time", None)
+        context.user_data.pop("schedule_timezone", None)
         return ConversationHandler.END
     except Exception as e:
         await update.message.reply_text(
