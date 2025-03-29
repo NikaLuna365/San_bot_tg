@@ -9,12 +9,14 @@ import aiofiles
 from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import ContextTypes, ConversationHandler
 
-# Импорты из проекта
-from ..constants import (
+# --- ИЗМЕНЕНО: Абсолютный импорт ---
+from constants import (
     State, WEEKDAY_FIXED_QUESTIONS, OPEN_QUESTIONS,
     build_fixed_keyboard, CANCEL_KEYBOARD, DATA_DIR
 )
-from .. import gemini_client # Импортируем модуль Gemini
+import gemini_client # Импортируем модуль Gemini
+
+# --- НЕ ИЗМЕНЕНО: Относительный импорт из той же папки ---
 from .common import exit_to_main # Импортируем общий обработчик выхода
 
 logger = logging.getLogger(__name__)
