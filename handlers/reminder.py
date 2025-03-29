@@ -6,11 +6,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
 
-# Импорты проекта
-from ..constants import State, REMINDER_TYPE_KEYBOARD, CANCEL_KEYBOARD, MAIN_MENU_KEYBOARD
-from .. import db
-from .. import scheduler # Импортируем наш модуль планировщика
+# --- ИЗМЕНЕНО: Абсолютный импорт ---
+from constants import State, REMINDER_TYPE_KEYBOARD, CANCEL_KEYBOARD, MAIN_MENU_KEYBOARD
+import db
+import scheduler # Импортируем наш модуль планировщика
 
+# --- НЕ ИЗМЕНЕНО: Относительный импорт из той же папки ---
 from .common import exit_to_main
 
 logger = logging.getLogger(__name__)
@@ -26,7 +27,7 @@ async def reminder_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
     return State.REMINDER_CHOICE
 
-async def reminder_choice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
+async def reminder_choice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State | int:
     """Обрабатывает выбор типа напоминания."""
     choice = update.message.text.strip()
     user_id = update.effective_user.id
@@ -34,7 +35,12 @@ async def reminder_choice_handler(update: Update, context: ContextTypes.DEFAULT_
     if choice == "Ежедневный тест":
         logger.info(f"Пользователь {user_id} выбрал настройку ежедневного напоминания.")
         # Проверяем, установлен ли часовой пояс
-        pool = context.bot_data["db_pool"]
+        pool = context.bot_data.get("db_pool")
+        if not pool:
+             logger.error(f"DB pool not found in context for user {user_id} in reminder_choice_handler")
+             await update.message.reply_text("Ошибка: не удалось подключиться к базе данных.", reply_markup=MAIN_MENU_KEYBOARD)
+             return ConversationHandler.END
+
         user_tz_str = await db.get_user_timezone(pool, user_id)
         if not user_tz_str:
             await update.message.reply_text(
@@ -64,7 +70,12 @@ async def reminder_set_daily_time(update: Update, context: ContextTypes.DEFAULT_
     """Получает желаемое время, сохраняет настройки и планирует задачу."""
     target_time_str = update.message.text.strip()
     user_id = update.effective_user.id
-    pool = context.bot_data["db_pool"]
+    pool = context.bot_data.get("db_pool")
+
+    if not pool:
+        logger.error(f"DB pool not found in context for user {user_id} in reminder_set_daily_time")
+        await update.message.reply_text("Ошибка: не удалось подключиться к базе данных.", reply_markup=MAIN_MENU_KEYBOARD)
+        return ConversationHandler.END
 
     if target_time_str == "Главное меню":
         return await exit_to_main(update, context)
@@ -110,6 +121,7 @@ async def reminder_set_daily_time(update: Update, context: ContextTypes.DEFAULT_
 
     # --- Планирование задачи через наш модуль scheduler ---
     try:
+        # Передаем application из context
         await scheduler.schedule_user_daily_reminder(context.application, user_id, target_local_time, user_zone)
         await update.message.reply_text(
             f"Отлично! Ежедневное напоминание установлено на {target_time_str} по вашему времени ({user_tz_str}).",
