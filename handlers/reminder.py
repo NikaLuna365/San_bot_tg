@@ -4,13 +4,16 @@ from datetime import time
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from telegram import Update
+# !!! ИЗМЕНЕНО: Импортируем ReplyKeyboardRemove для скрытия клавиатуры при переходе !!!
+from telegram import ReplyKeyboardRemove
 from telegram.ext import ContextTypes, ConversationHandler
 
 # Импорты проекта
-# !!! ИЗМЕНЕНО: Убрана зависимость от schedule_handlers !!!
 from constants import State, REMINDER_TYPE_KEYBOARD, CANCEL_KEYBOARD, MAIN_MENU_KEYBOARD
 import db
 import scheduler
+# --- ИЗМЕНЕНО: Снова импортируем schedule_handlers ---
+import handlers.schedule as schedule_handlers
 
 from .common import exit_to_main
 
@@ -22,7 +25,7 @@ async def reminder_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     logger.info(f"Пользователь {user_id} вошел в меню напоминаний.")
     # TODO: Добавить возможность просмотра/удаления существующих напоминаний
     await update.message.reply_text(
-        "Здесь Вы можете настроить напоминание о ежедневном тесте.",
+        "Здесь Вы можете настроить напоминание о ежедневном тесте или запланировать регулярную ретроспективу.",
         reply_markup=REMINDER_TYPE_KEYBOARD
     )
     return State.REMINDER_CHOICE
@@ -57,22 +60,31 @@ async def reminder_choice_handler(update: Update, context: ContextTypes.DEFAULT_
             )
             return State.REMINDER_DAILY_TIME
 
-    # !!! ИЗМЕНЕНО: Убран блок elif для "Запланированная ретроспектива" !!!
-    # elif choice == "Запланированная ретроспектива":
-        # ... (код удален) ...
+    # --- ИЗМЕНЕНО: Обработка выбора "Запланированная ретроспектива" ---
+    elif choice == "Запланированная ретроспектива":
+        logger.info(f"Пользователь {user_id} выбрал настройку запланированной ретроспективы из меню Напоминание.")
+        await update.message.reply_text(
+            "Хорошо, переходим к настройке расписания для ретроспективы...",
+            # Убираем клавиатуру перед вызовом другого хендлера
+            reply_markup=ReplyKeyboardRemove()
+        )
+        # Завершаем ТЕКУЩИЙ диалог (reminder_conv)
+        # и ВЫЗЫВАЕМ стартовую функцию ДРУГОГО диалога (schedule_conv)
+        await schedule_handlers.schedule_start(update, context)
+        # Возвращаем END, чтобы PTB не пытался найти состояние schedule_conv внутри reminder_conv
+        return ConversationHandler.END
 
     elif choice == "Главное меню":
         return await exit_to_main(update, context)
     else:
         await update.message.reply_text(
-            "Пожалуйста, выберите 'Ежедневный тест' или 'Главное меню'.",
+            "Пожалуйста, выберите один из предложенных вариантов.",
             reply_markup=REMINDER_TYPE_KEYBOARD
         )
         return State.REMINDER_CHOICE
 
 # Функция reminder_set_daily_time остается без изменений
 async def reminder_set_daily_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State | int:
-    """Получает желаемое время, сохраняет настройки и планирует задачу."""
     target_time_str = update.message.text.strip()
     user_id = update.effective_user.id
     pool = context.bot_data.get("db_pool")
@@ -85,32 +97,21 @@ async def reminder_set_daily_time(update: Update, context: ContextTypes.DEFAULT_
     if target_time_str == "Главное меню":
         return await exit_to_main(update, context)
 
-    try:
-        target_local_time = time.fromisoformat(target_time_str)
+    try: target_local_time = time.fromisoformat(target_time_str)
     except ValueError:
-        await update.message.reply_text(
-            "Неверный формат времени. Пожалуйста, введите время в формате ЧЧ:ММ (например, 08:00).",
-            reply_markup=CANCEL_KEYBOARD
-        )
+        await update.message.reply_text("Неверный формат времени. Пожалуйста, введите время в формате ЧЧ:ММ (например, 08:00).", reply_markup=CANCEL_KEYBOARD)
         return State.REMINDER_DAILY_TIME
 
     user_tz_str = await db.get_user_timezone(pool, user_id)
     if not user_tz_str:
         logger.error(f"Не найден часовой пояс для {user_id} при установке напоминания.")
-        await update.message.reply_text(
-            "Произошла ошибка: не найден ваш часовой пояс. Пожалуйста, установите его через /set_timezone.",
-            reply_markup=MAIN_MENU_KEYBOARD
-        )
+        await update.message.reply_text("Произошла ошибка: не найден ваш часовой пояс. Пожалуйста, установите его через /set_timezone.", reply_markup=MAIN_MENU_KEYBOARD)
         return ConversationHandler.END
 
-    try:
-        user_zone = ZoneInfo(user_tz_str)
+    try: user_zone = ZoneInfo(user_tz_str)
     except ZoneInfoNotFoundError:
         logger.error(f"Неверный часовой пояс '{user_tz_str}' для {user_id} в БД.")
-        await update.message.reply_text(
-            f"Произошла ошибка: ваш сохраненный часовой пояс '{user_tz_str}' некорректен. Пожалуйста, установите его заново через /set_timezone.",
-            reply_markup=MAIN_MENU_KEYBOARD
-        )
+        await update.message.reply_text(f"Произошла ошибка: ваш сохраненный часовой пояс '{user_tz_str}' некорректен. Пожалуйста, установите его заново через /set_timezone.", reply_markup=MAIN_MENU_KEYBOARD)
         return ConversationHandler.END
 
     try:
@@ -123,14 +124,8 @@ async def reminder_set_daily_time(update: Update, context: ContextTypes.DEFAULT_
 
     try:
         await scheduler.schedule_user_daily_reminder(context.application, user_id, target_local_time, user_zone)
-        await update.message.reply_text(
-            f"Отлично! Ежедневное напоминание установлено на {target_time_str} по вашему времени ({user_tz_str}).",
-            reply_markup=MAIN_MENU_KEYBOARD
-        )
+        await update.message.reply_text(f"Отлично! Ежедневное напоминание установлено на {target_time_str} по вашему времени ({user_tz_str}).", reply_markup=MAIN_MENU_KEYBOARD)
         return ConversationHandler.END
     except Exception as e:
-        await update.message.reply_text(
-            "Произошла ошибка при установке напоминания. Настройки сохранены, но напоминание может не работать. Попробуйте настроить позже.",
-             reply_markup=MAIN_MENU_KEYBOARD
-             )
+        await update.message.reply_text("Произошла ошибка при установке напоминания. Настройки сохранены, но напоминание может не работать. Попробуйте настроить позже.", reply_markup=MAIN_MENU_KEYBOARD)
         return ConversationHandler.END
