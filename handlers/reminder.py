@@ -7,11 +7,11 @@ from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
 
 # Импорты проекта
+# !!! ИЗМЕНЕНО: Обновлена клавиатура из constants !!!
 from constants import State, REMINDER_TYPE_KEYBOARD, CANCEL_KEYBOARD, MAIN_MENU_KEYBOARD
 import db
 import scheduler
-# --- УБРАНО: Импорт schedule_handlers ---
-# import handlers.schedule as schedule_handlers
+# Убрали импорт schedule_handlers, так как переход не делаем
 
 from .common import exit_to_main
 
@@ -22,7 +22,7 @@ async def reminder_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = update.effective_user.id
     logger.info(f"Пользователь {user_id} вошел в меню напоминаний.")
     await update.message.reply_text(
-        "О чем бы Вы хотели получать напоминания?",
+        "О чем бы Вы хотели получать напоминания или что настроить?", # Обновили текст
         reply_markup=REMINDER_TYPE_KEYBOARD
     )
     return State.REMINDER_CHOICE
@@ -38,7 +38,8 @@ async def reminder_choice_handler(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("Ошибка: не удалось подключиться к базе данных.", reply_markup=MAIN_MENU_KEYBOARD)
         return ConversationHandler.END
 
-    if choice == "Ежедневный тест":
+    # !!! ИЗМЕНЕНО: Текст кнопки для ежедневного теста !!!
+    if choice == "Настроить ежедневный тест":
         logger.info(f"Пользователь {user_id} выбрал настройку ежедневного напоминания.")
         user_tz_str = await db.get_user_timezone(pool, user_id)
         if not user_tz_str:
@@ -56,14 +57,14 @@ async def reminder_choice_handler(update: Update, context: ContextTypes.DEFAULT_
             )
             return State.REMINDER_DAILY_TIME
 
-    # --- ИЗМЕНЕНО: Убран прямой переход, дается инструкция ---
-    elif choice == "Запланированная ретроспектива":
-        logger.info(f"Пользователь {user_id} выбрал настройку напоминания о ретроспективе.")
+    # !!! ИЗМЕНЕНО: Обработка кнопки "Настроить ретроспективу" !!!
+    elif choice == "Настроить ретроспективу":
+        logger.info(f"Пользователь {user_id} выбрал настройку ретроспективы из меню напоминаний.")
+        # Просто отправляем пользователя в нужное меню
         await update.message.reply_text(
-            "Чтобы настроить или изменить расписание ретроспективы, пожалуйста, вернитесь в главное меню "
-            "и выберите 'Ретроспектива', а затем 'Запланировать'.",
-            # Можно добавить команду: "Или используйте команду /schedule.",
-            reply_markup=MAIN_MENU_KEYBOARD # Сразу возвращаем в главное меню
+            "Чтобы настроить запланированную ретроспективу, пожалуйста, "
+            "используйте кнопку 'Запланировать Ретро' в главном меню.",
+            reply_markup=MAIN_MENU_KEYBOARD # Возвращаем в главное меню
         )
         return ConversationHandler.END # Завершаем диалог напоминаний
 
@@ -76,7 +77,7 @@ async def reminder_choice_handler(update: Update, context: ContextTypes.DEFAULT_
         )
         return State.REMINDER_CHOICE
 
-# Функция reminder_set_daily_time остается без изменений
+# Функция reminder_set_daily_time остается БЕЗ ИЗМЕНЕНИЙ
 async def reminder_set_daily_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State | int:
     # ... (код без изменений) ...
     target_time_str = update.message.text.strip()
