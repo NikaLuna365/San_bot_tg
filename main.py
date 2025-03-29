@@ -3,6 +3,9 @@ import asyncio
 import logging
 import os
 
+# --- ДОБАВЛЕНО: Импорт Update ---
+from telegram import Update # <--- Вот недостающий импорт
+
 from telegram.ext import (
     Application,
     ApplicationBuilder, # Используем ApplicationBuilder
@@ -71,8 +74,11 @@ def main() -> None:
 
     # --- Persistence ---
     # Используем PicklePersistence для сохранения user_data, chat_data, bot_data
-    persistence = PicklePersistence(filepath="bot_persistence.pickle")
-    logger.info(f"Используется PicklePersistence: bot_persistence.pickle")
+    # Убедимся, что путь соответствует volume в docker-compose.yml
+    PERSISTENCE_FILE = os.path.join("persistence", "bot_persistence.pickle")
+    os.makedirs(os.path.dirname(PERSISTENCE_FILE), exist_ok=True) # Создаем директорию, если ее нет
+    persistence = PicklePersistence(filepath=PERSISTENCE_FILE)
+    logger.info(f"Используется PicklePersistence: {PERSISTENCE_FILE}")
 
     # --- Создание Application ---
     builder = Application.builder().token(TOKEN).persistence(persistence)
@@ -84,7 +90,8 @@ def main() -> None:
     # --- Инициализация пула БД и сохранение в bot_data ---
     # Запускаем в event loop, который будет использоваться приложением
     try:
-        pool = asyncio.get_event_loop().run_until_complete(create_db_pool())
+        # Используем asyncio.run для упрощения запуска в синхронной функции main
+        pool = asyncio.run(create_db_pool())
         if pool:
             app.bot_data["db_pool"] = pool
             logger.info("Пул БД успешно инициализирован и сохранен в bot_data.")
@@ -137,9 +144,9 @@ def main() -> None:
     )
 
     # 3. Планирование ретроспективы
+    # Убедимся, что точка входа соответствует кнопке
     schedule_conv = ConversationHandler(
-         # Используем отдельную точку входа, если кнопка "Запланировать" в другом меню
-         entry_points=[MessageHandler(filters.Regex("^Запланировать$"), schedule.schedule_start)], # Пример, если кнопка называется так
+         entry_points=[MessageHandler(filters.Regex("^Запланировать$"), schedule.schedule_start)],
          states={
              State.SCHEDULE_DAY_NEW: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule.schedule_day_handler)],
              State.SCHEDULE_TARGET_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule.schedule_target_time_handler)],
@@ -207,7 +214,8 @@ def main() -> None:
 
     # --- Запуск бота ---
     logger.info("Запуск бота (polling)...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES) # Получаем все типы обновлений
+    # !!! ИСПРАВЛЕНО: Используем импортированный Update !!!
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
     logger.info("Бот остановлен.")
 
