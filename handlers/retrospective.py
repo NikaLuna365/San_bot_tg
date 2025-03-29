@@ -2,20 +2,23 @@
 import logging
 import json
 import os
-from datetime import datetime, timedelta
-from typing import Dict, Any, List
+from datetime import datetime, timedelta, timezone
+from typing import Dict, Any, List, Optional
 
 import aiofiles
-from telegram import Update, ReplyKeyboardRemove
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram import Update, ReplyKeyboardRemove, ReplyKeyboardMarkup
+from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters
 
-# Импорты из проекта
-from ..constants import (
+# --- ИЗМЕНЕНО: Абсолютный импорт ---
+from constants import (
     State, RETRO_OPEN_QUESTIONS, DATA_DIR,
-    RETRO_CHOICE_KEYBOARD, RETRO_NOW_PERIOD_KEYBOARD, CANCEL_KEYBOARD
+    RETRO_CHOICE_KEYBOARD, RETRO_NOW_PERIOD_KEYBOARD, CANCEL_KEYBOARD,
+    MAIN_MENU_KEYBOARD # Добавлено для сообщений об ошибках
 )
-from .. import gemini_client
-from ..utils import get_now_utc
+import gemini_client
+from utils import get_now_utc
+
+# --- НЕ ИЗМЕНЕНО: Относительный импорт из той же папки ---
 from .common import exit_to_main
 
 logger = logging.getLogger(__name__)
@@ -46,17 +49,11 @@ async def retrospective_choice_handler(update: Update, context: ContextTypes.DEF
         return State.RETRO_PERIOD_CHOICE
     elif choice == "Запланировать":
         logger.info(f"Пользователь {user_id} выбрал запланировать ретроспективу.")
-        # Передаем управление в ConversationHandler планирования (определен в main.py)
-        # Возвращаем специальное значение, которое будет точкой входа для другого хендлера
-        # или просто вызываем его стартовую функцию, если так проще.
-        # Простой вариант: просто отправить сообщение и закончить этот диалог.
-        # Другой обработчик (schedule_conv) поймает кнопку "Запланировать ретроспективу".
-        # --- Этот блок кода не нужен, если есть отдельный ConversationHandler для schedule ---
-        # await update.message.reply_text("Перехожу к настройке расписания...")
-        # return State.SCHEDULE_START # Это состояние должно быть точкой входа для schedule_conv
-        # ---
-        # Если точки входа раздельные (по кнопкам), этот хендлер просто завершается
-        await update.message.reply_text("Для планирования используйте соответствующий раздел в главном меню или команду.")
+        # Сообщение о том, как это сделать
+        await update.message.reply_text(
+            "Для планирования ретроспективы используйте соответствующую кнопку или команду в главном меню.",
+             reply_markup=MAIN_MENU_KEYBOARD # Возвращаем в главное меню
+             )
         return ConversationHandler.END # Завершаем этот диалог
     elif choice == "Главное меню":
         return await exit_to_main(update, context)
@@ -100,7 +97,7 @@ async def retrospective_period_choice(update: Update, context: ContextTypes.DEFA
     )
     return State.RETRO_OPEN_1
 
-async def retro_open_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, current_state: State, next_state: State) -> State:
+async def retro_open_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, current_state: State, next_state: State) -> State | int:
     """Общий обработчик для открытых вопросов ретроспективы."""
     user_input = update.message.text.strip()
     user_id = update.effective_user.id
@@ -123,18 +120,27 @@ async def retro_open_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
             "Спасибо! Собираю данные и готовлю анализ...",
             reply_markup=ReplyKeyboardRemove()
         )
-        await run_retrospective_analysis(update, context) # Вызываем функцию анализа
-        return State.GEMINI_CHAT_RETRO # Переходим в чат по результатам
+        # Запускаем анализ и проверяем результат (была ли ошибка, например, мало данных)
+        success = await run_retrospective_analysis(update, context)
+        if success:
+            return State.GEMINI_CHAT_RETRO # Переходим в чат по результатам
+        else:
+            # Если анализ не удался (например, мало данных), сообщение уже отправлено,
+            # просто завершаем диалог
+            return ConversationHandler.END
+
 
 # Генерируем состояния и переходы для открытых вопросов
 retro_open_states = {}
 for i in range(len(RETRO_OPEN_QUESTIONS)):
     current_state_enum = State(State.RETRO_OPEN_1.value + i)
+    # Определяем следующее состояние: либо следующий вопрос, либо чат
     next_state_enum = State(State.RETRO_OPEN_1.value + i + 1) if i < len(RETRO_OPEN_QUESTIONS) - 1 else State.GEMINI_CHAT_RETRO
 
     # Создаем обертки для передачи состояний в обработчик
     async def create_handler_wrapper(current_s, next_s):
-        async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
+        async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State | int:
+            # В последнем шаге next_state будет GEMINI_CHAT_RETRO
             return await retro_open_handler(update, context, current_s, next_s)
         return handler
 
@@ -143,8 +149,9 @@ for i in range(len(RETRO_OPEN_QUESTIONS)):
     ]
 
 
-async def run_retrospective_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Собирает данные тестов, рассчитывает средние и вызывает Gemini."""
+async def run_retrospective_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Собирает данные тестов, рассчитывает средние, вызывает Gemini и отправляет результат.
+       Возвращает True при успехе, False при ошибке (например, мало данных)."""
     user_id = update.effective_user.id
     period_days = context.user_data.get("retro_period_days", 7)
     now = get_now_utc()
@@ -162,7 +169,7 @@ async def run_retrospective_analysis(update: Update, context: ContextTypes.DEFAU
     except Exception as e:
         logger.exception(f"Ошибка листинга файлов в {DATA_DIR}")
 
-    tests_in_period: List[Dict[str, Any]] = []
+    tests_in_period_answers: List[Dict[str, Any]] = [] # Собираем только словари с ответами
     for filename in user_files:
         file_path = os.path.join(DATA_DIR, filename)
         try:
@@ -172,69 +179,84 @@ async def run_retrospective_analysis(update: Update, context: ContextTypes.DEFAU
                 # Проверяем timestamp
                 ts_str = data.get("timestamp")
                 if ts_str:
-                    ts = datetime.fromisoformat(ts_str).replace(tzinfo=None) # Наивное время для сравнения
-                    start_date_naive = start_date.replace(tzinfo=None)
-                    now_naive = now.replace(tzinfo=None)
-                    # Убедимся, что время в UTC, если оно было сохранено с TZ
-                    if data.get("timestamp") and data["timestamp"].endswith('+00:00'):
-                         ts_aware = datetime.fromisoformat(data["timestamp"])
-                    else: # Если сохранено без TZ, считаем UTC
-                         ts_aware = datetime.fromisoformat(data["timestamp"]).replace(tzinfo=timezone.utc)
+                    # Пытаемся обработать время с TZ и без
+                    try:
+                        if '+' in ts_str or 'Z' in ts_str:
+                            ts_aware = datetime.fromisoformat(ts_str)
+                        else: # Если сохранено без TZ, считаем UTC
+                            ts_aware = datetime.fromisoformat(ts_str).replace(tzinfo=timezone.utc)
 
-                    if start_date <= ts_aware <= now: # Сравниваем aware datetime
-                        tests_in_period.append(data.get("test_answers", {}))
+                        # Сравниваем aware datetime
+                        if start_date <= ts_aware <= now:
+                            test_answers = data.get("test_answers")
+                            if isinstance(test_answers, dict):
+                                tests_in_period_answers.append(test_answers)
+                    except ValueError:
+                         logger.warning(f"Неверный формат timestamp '{ts_str}' в файле {filename}")
+                         continue # Пропускаем файл с неверным форматом
 
         except Exception as e:
             logger.exception(f"Ошибка чтения или парсинга файла {filename}:")
 
-    test_count = len(tests_in_period)
+    test_count = len(tests_in_period_answers)
     logger.info(f"Найдено {test_count} тестов для пользователя {user_id} за период.")
 
-    if test_count < 3: # Понизим порог для тестирования
+    # Проверка на минимальное количество тестов
+    MIN_TESTS_FOR_RETRO = 3
+    if test_count < MIN_TESTS_FOR_RETRO:
         await update.message.reply_text(
             f"К сожалению, найдено слишком мало ({test_count}) данных за последние {period_days} дней. "
-            "Для анализа ретроспективы нужно хотя бы 3 пройденных теста за этот период.",
-            reply_markup=constants.MAIN_MENU_KEYBOARD # Используем константу
+            f"Для анализа ретроспективы нужно хотя бы {MIN_TESTS_FOR_RETRO} пройденных теста за этот период.",
+            reply_markup=MAIN_MENU_KEYBOARD # Используем константу
         )
-        # Нужно прервать выполнение и вернуться в меню
-        # Это сложно сделать из этой функции, лучше было бы проверять до входа в нее
-        # или возвращать флаг ошибки. Пока просто логируем.
-        logger.warning(f"Недостаточно данных для ретроспективы user {user_id} ({test_count}<3)")
-        context.user_data["retro_error"] = True # Ставим флаг ошибки
-        return # Прерываем анализ
+        logger.warning(f"Недостаточно данных для ретроспективы user {user_id} ({test_count}<{MIN_TESTS_FOR_RETRO})")
+        return False # Анализ не выполнен
 
     # --- Расчет средних ---
     sums: Dict[str, float] = {f"fixed_{i}": 0.0 for i in range(1, 7)}
     counts: Dict[str, int] = {f"fixed_{i}": 0 for i in range(1, 7)}
 
-    for answers in tests_in_period:
+    for answers in tests_in_period_answers:
         for i in range(1, 7):
             key = f"fixed_{i}"
             try:
-                val = int(answers.get(key)) # Получаем ответ
-                sums[key] += val
-                counts[key] += 1
+                # Проверяем, что значение - строка и конвертируем в int
+                val_str = answers.get(key)
+                if isinstance(val_str, str):
+                    val = int(val_str)
+                    sums[key] += val
+                    counts[key] += 1
+                elif isinstance(val_str, (int, float)): # На случай, если где-то уже сохранено числом
+                    sums[key] += float(val_str)
+                    counts[key] += 1
             except (ValueError, TypeError, KeyError):
-                continue # Пропускаем, если ответа нет или он не числовой
+                # Игнорируем ошибки конвертации или отсутствующие ключи
+                continue
 
     averages: Dict[str, Optional[float]] = {}
-    # Расчет средних для шкал
     try:
+        # Рассчитываем среднее только если есть данные для обеих компонент шкалы
         if counts["fixed_1"] > 0 and counts["fixed_2"] > 0:
-            averages["Самочувствие"] = (sums["fixed_1"] / counts["fixed_1"] + sums["fixed_2"] / counts["fixed_2"]) / 2
+            avg1 = sums["fixed_1"] / counts["fixed_1"]
+            avg2 = sums["fixed_2"] / counts["fixed_2"]
+            averages["Самочувствие"] = (avg1 + avg2) / 2
         else: averages["Самочувствие"] = None
 
         if counts["fixed_3"] > 0 and counts["fixed_4"] > 0:
-            averages["Активность"] = (sums["fixed_3"] / counts["fixed_3"] + sums["fixed_4"] / counts["fixed_4"]) / 2
+            avg3 = sums["fixed_3"] / counts["fixed_3"]
+            avg4 = sums["fixed_4"] / counts["fixed_4"]
+            averages["Активность"] = (avg3 + avg4) / 2
         else: averages["Активность"] = None
 
         if counts["fixed_5"] > 0 and counts["fixed_6"] > 0:
-            averages["Настроение"] = (sums["fixed_5"] / counts["fixed_5"] + sums["fixed_6"] / counts["fixed_6"]) / 2
+            avg5 = sums["fixed_5"] / counts["fixed_5"]
+            avg6 = sums["fixed_6"] / counts["fixed_6"]
+            averages["Настроение"] = (avg5 + avg6) / 2
         else: averages["Настроение"] = None
     except ZeroDivisionError:
-        logger.error(f"Деление на ноль при расчете средних для user {user_id}")
-        averages = {k: None for k in ["Самочувствие", "Активность", "Настроение"]}
-
+         logger.error(f"Деление на ноль при расчете средних для user {user_id}")
+         # Обнуляем все, если была ошибка деления
+         averages = {k: None for k in ["Самочувствие", "Активность", "Настроение"]}
 
     # --- Вызов Gemini ---
     open_answers = context.user_data.get("retro_answers", {})
@@ -280,6 +302,7 @@ async def run_retrospective_analysis(update: Update, context: ContextTypes.DEFAU
         reply_markup=CANCEL_KEYBOARD,
         parse_mode='Markdown'
     )
+    return True # Анализ успешно завершен
 
 
 async def retrospective_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
@@ -287,14 +310,14 @@ async def retrospective_chat_handler(update: Update, context: ContextTypes.DEFAU
     user_input = update.message.text.strip()
     user_id = update.effective_user.id
 
-    # Проверяем, не было ли ошибки на предыдущем шаге
-    if context.user_data.pop("retro_error", False):
-         # Если была ошибка (мало данных), просто выходим в меню
-         logger.warning(f"Прерван чат ретроспективы для {user_id} из-за предыдущей ошибки.")
-         return await exit_to_main(update, context)
-
     if user_input == "Главное меню":
         return await exit_to_main(update, context)
+
+    # Если контекста нет (например, из-за ошибки на предыдущем шаге), не продолжаем чат
+    if "retro_chat_context" not in context.user_data:
+        logger.warning(f"Отсутствует контекст для чата ретроспективы user {user_id}")
+        await update.message.reply_text("Не найден контекст для этого чата. Возвращаемся в меню.", reply_markup=MAIN_MENU_KEYBOARD)
+        return ConversationHandler.END
 
     logger.info(f"User {user_id} продолжает чат после ретроспективы: '{user_input[:50]}...'")
     chat_context = context.user_data.get("retro_chat_context", "Результаты ретроспективы учтены.")
