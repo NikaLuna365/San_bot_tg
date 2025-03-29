@@ -11,27 +11,20 @@ from telegram.ext import (
 
 # Импорты проекта
 from db import create_db_pool
-# !!! ИЗМЕНЕНО: Используется MAIN_MENU_KEYBOARD без лишней кнопки !!!
-from constants import State, MAIN_MENU_KEYBOARD
+from constants import State, MAIN_MENU_KEYBOARD # Используем обновленную клавиатуру
 from utils import get_now_utc
 from handlers import common, test, retrospective, reminder, schedule, timezone
 import scheduler
 
 # --- Настройка логирования ---
-# (остается без изменений)
-LOGS_DIR = "logs"
-os.makedirs(LOGS_DIR, exist_ok=True)
-LOG_FILENAME = os.path.join(LOGS_DIR, "bot.log")
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(), logging.FileHandler(LOG_FILENAME, encoding='utf-8')]
-)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("telegram.ext").setLevel(logging.INFO)
+# (без изменений)
+LOGS_DIR = "logs"; os.makedirs(LOGS_DIR, exist_ok=True); LOG_FILENAME = os.path.join(LOGS_DIR, "bot.log")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", handlers=[logging.StreamHandler(), logging.FileHandler(LOG_FILENAME, encoding='utf-8')])
+logging.getLogger("httpx").setLevel(logging.WARNING); logging.getLogger("telegram.ext").setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- Функция пост-инициализации ---
-# (остается без изменений)
+# (без изменений)
 async def post_init(application: Application):
     logger.info("Запуск post_init...")
     try:
@@ -77,12 +70,11 @@ def main() -> None:
         fallbacks=[ CommandHandler("cancel", common.cancel), MessageHandler(filters.Regex("^(?i)главное меню$"), common.exit_to_main)],
         persistent=True, name="test_conversation", allow_reentry=True
     )
-    # 2. Ретроспектива (мгновенная)
+    # 2. Ретроспектива (мгновенная) (без изменений)
     retro_conv = ConversationHandler(
-         entry_points=[MessageHandler(filters.Regex("^Ретроспектива$"), retrospective.retrospective_start)], # Точка входа та же
+         entry_points=[MessageHandler(filters.Regex("^Ретроспектива$"), retrospective.retrospective_start)],
          states={
-             # !!! Убрано State.RETRO_CHOICE !!!
-             State.RETRO_PERIOD_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, retrospective.retrospective_period_choice)], # Теперь это первое состояние
+             State.RETRO_PERIOD_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, retrospective.retrospective_period_choice)],
              **retrospective.retro_open_states,
              State.GEMINI_CHAT_RETRO: [MessageHandler(filters.TEXT & ~filters.COMMAND, retrospective.retrospective_chat_handler)]
          },
@@ -90,24 +82,28 @@ def main() -> None:
          persistent=True, name="retro_conversation", allow_reentry=True
     )
     # 3. Планирование ретроспективы
-    # !!! ИЗМЕНЕНО: Убрана точка входа по кнопке !!!
+    # !!! ИЗМЕНЕНО: Точка входа теперь - текстовый ответ с днем недели !!!
+    # (предполагается, что этот текст не конфликтует с другими командами)
     schedule_conv = ConversationHandler(
-         entry_points=[], # Точек входа по сообщению больше нет, вход через reminder_handler
+         entry_points=[MessageHandler(
+             # Фильтр на дни недели (короткие и полные названия)
+             filters.Regex(r"^(?i)(Пн|Вт|Ср|Чт|Пт|Сб|Вс|Понедельник|Вторник|Среда|Четверг|Пятница|Суббота|Воскресенье)$"),
+             schedule.schedule_day_handler)
+             ],
          states={
-             State.SCHEDULE_DAY_NEW: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule.schedule_day_handler)],
+             State.SCHEDULE_DAY_NEW: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule.schedule_day_handler)], # На случай, если первый ввод был невалидным
              State.SCHEDULE_TARGET_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule.schedule_target_time_handler)],
              State.SCHEDULE_MODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule.schedule_mode_handler)]
          },
          fallbacks=[ CommandHandler("cancel", common.cancel), MessageHandler(filters.Regex("^(?i)главное меню$"), common.exit_to_main)],
-         persistent=True, name="schedule_conversation", allow_reentry=True # allow_reentry важно, т.к. входим из другого хендлера
+         persistent=True, name="schedule_conversation", allow_reentry=True
     )
-    # 4. Напоминания (включает вход в планирование)
+    # 4. Напоминания (включает "вход" в планирование) (без изменений)
     reminder_conv = ConversationHandler(
          entry_points=[MessageHandler(filters.Regex("^Напоминание$"), reminder.reminder_start)],
          states={
              State.REMINDER_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder.reminder_choice_handler)],
              State.REMINDER_DAILY_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminder.reminder_set_daily_time)],
-             # Состояния для schedule_conv здесь не нужны
          },
          fallbacks=[ CommandHandler("cancel", common.cancel), MessageHandler(filters.Regex("^(?i)главное меню$"), common.exit_to_main)],
          persistent=True, name="reminder_conversation", allow_reentry=True
@@ -121,15 +117,16 @@ def main() -> None:
     )
 
     # Добавляем все Conversation Handlers
-    # Порядок важен, если есть пересекающиеся entry_points (здесь нет)
+    # Порядок может иметь значение, если entry points пересекаются.
+    # schedule_conv должен идти ДО reminder_conv? Нет, т.к. точка входа schedule - текст дня недели.
     app.add_handler(test_conv)
     app.add_handler(retro_conv)
-    app.add_handler(schedule_conv) # Должен быть зарегистрирован, чтобы его состояния работали
-    app.add_handler(reminder_conv)
+    app.add_handler(schedule_conv) # Регистрируем schedule_conv, чтобы он мог обрабатывать состояния
+    app.add_handler(reminder_conv) # reminder_conv теперь может "передать" управление schedule_conv
     app.add_handler(timezone_conv)
 
     # --- Обычные обработчики ---
-    # (остаются без изменений)
+    # (без изменений)
     app.add_handler(CommandHandler("start", common.start)); app.add_handler(CommandHandler("help", common.help_command))
     app.add_handler(MessageHandler(filters.Regex("^Помощь$"), common.help_command)); app.add_handler(MessageHandler(filters.Regex("^(?i)главное меню$"), common.exit_to_main))
     # --- Обработчик ошибок ---
