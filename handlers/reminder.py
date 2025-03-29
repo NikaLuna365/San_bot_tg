@@ -6,12 +6,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
 
-# --- ИЗМЕНЕНО: Абсолютный импорт ---
+# Импорты проекта
 from constants import State, REMINDER_TYPE_KEYBOARD, CANCEL_KEYBOARD, MAIN_MENU_KEYBOARD
 import db
-import scheduler # Импортируем наш модуль планировщика
+import scheduler
+# --- ИЗМЕНЕНО: Импортируем schedule для перехода к его диалогу ---
+import handlers.schedule as schedule_handlers
 
-# --- НЕ ИЗМЕНЕНО: Относительный импорт из той же папки ---
 from .common import exit_to_main
 
 logger = logging.getLogger(__name__)
@@ -20,9 +21,9 @@ async def reminder_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Начинает диалог настройки напоминаний."""
     user_id = update.effective_user.id
     logger.info(f"Пользователь {user_id} вошел в меню напоминаний.")
-    # TODO: Добавить возможность управления существующими напоминаниями
+    # TODO: Добавить возможность просмотра/удаления существующих напоминаний
     await update.message.reply_text(
-        "Выберите тип напоминания, который хотите настроить:",
+        "О чем бы Вы хотели получать напоминания?", # Более дружелюбная формулировка
         reply_markup=REMINDER_TYPE_KEYBOARD
     )
     return State.REMINDER_CHOICE
@@ -31,16 +32,16 @@ async def reminder_choice_handler(update: Update, context: ContextTypes.DEFAULT_
     """Обрабатывает выбор типа напоминания."""
     choice = update.message.text.strip()
     user_id = update.effective_user.id
+    pool = context.bot_data.get("db_pool")
+
+    if not pool:
+        logger.error(f"DB pool not found in context for user {user_id} in reminder_choice_handler")
+        await update.message.reply_text("Ошибка: не удалось подключиться к базе данных.", reply_markup=MAIN_MENU_KEYBOARD)
+        return ConversationHandler.END
 
     if choice == "Ежедневный тест":
         logger.info(f"Пользователь {user_id} выбрал настройку ежедневного напоминания.")
         # Проверяем, установлен ли часовой пояс
-        pool = context.bot_data.get("db_pool")
-        if not pool:
-             logger.error(f"DB pool not found in context for user {user_id} in reminder_choice_handler")
-             await update.message.reply_text("Ошибка: не удалось подключиться к базе данных.", reply_markup=MAIN_MENU_KEYBOARD)
-             return ConversationHandler.END
-
         user_tz_str = await db.get_user_timezone(pool, user_id)
         if not user_tz_str:
             await update.message.reply_text(
@@ -56,16 +57,44 @@ async def reminder_choice_handler(update: Update, context: ContextTypes.DEFAULT_
                 reply_markup=CANCEL_KEYBOARD
             )
             return State.REMINDER_DAILY_TIME
+
+    # --- ИЗМЕНЕНО: Обработка выбора "Запланированная ретроспектива" ---
+    elif choice == "Запланированная ретроспектива":
+        logger.info(f"Пользователь {user_id} выбрал настройку напоминания о ретроспективе.")
+        await update.message.reply_text(
+            "Хорошо, давайте настроим расписание для ретроспективы.",
+            reply_markup=CANCEL_KEYBOARD # Даем возможность отменить переход
+        )
+        # Запускаем диалог планирования ретроспективы
+        return await schedule_handlers.schedule_start(update, context)
+        # Важно: schedule_start должен возвращать начальное состояние
+        # своего ConversationHandler (например, State.SCHEDULE_DAY_NEW),
+        # и этот ConversationHandler должен быть зарегистрирован в main.py
+        # с точкой входа, которая не конфликтует (например, через отдельную команду
+        # или как здесь - переходом из другого хендлера).
+        # ВАЖНО: Этот способ перехода между ConversationHandler'ами может быть нестабилен
+        # и зависит от реализации PTB. Более надежный способ - завершить этот диалог (END)
+        # и попросить пользователя нажать кнопку "Ретроспектива" -> "Запланировать".
+        # Оставим пока так для эксперимента, но будьте готовы изменить.
+        # --- Альтернативный, более надежный вариант: ---
+        # await update.message.reply_text(
+        #     "Чтобы настроить запланированную ретроспективу, пожалуйста, "
+        #     "вернитесь в главное меню и выберите 'Ретроспектива' -> 'Запланировать'.",
+        #     reply_markup=MAIN_MENU_KEYBOARD
+        # )
+        # return ConversationHandler.END
+        # --- Конец альтернативного варианта ---
+
     elif choice == "Главное меню":
         return await exit_to_main(update, context)
     else:
-        # TODO: Обработать другие типы напоминаний, если они появятся
         await update.message.reply_text(
-            "Пожалуйста, выберите 'Ежедневный тест' или 'Главное меню'.",
+            "Пожалуйста, выберите один из предложенных вариантов.",
             reply_markup=REMINDER_TYPE_KEYBOARD
         )
         return State.REMINDER_CHOICE
 
+# Функция reminder_set_daily_time остается без изменений по сравнению с предыдущей версией
 async def reminder_set_daily_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State | int:
     """Получает желаемое время, сохраняет настройки и планирует задачу."""
     target_time_str = update.message.text.strip()
@@ -81,17 +110,16 @@ async def reminder_set_daily_time(update: Update, context: ContextTypes.DEFAULT_
         return await exit_to_main(update, context)
 
     try:
-        # Преобразуем "ЧЧ:ММ" в объект time
         target_local_time = time.fromisoformat(target_time_str)
     except ValueError:
         await update.message.reply_text(
             "Неверный формат времени. Пожалуйста, введите время в формате ЧЧ:ММ (например, 08:00).",
             reply_markup=CANCEL_KEYBOARD
         )
-        return State.REMINDER_DAILY_TIME # Остаемся в том же состоянии
+        return State.REMINDER_DAILY_TIME
 
     user_tz_str = await db.get_user_timezone(pool, user_id)
-    if not user_tz_str: # Дополнительная проверка
+    if not user_tz_str:
         logger.error(f"Не найден часовой пояс для {user_id} при установке напоминания.")
         await update.message.reply_text(
             "Произошла ошибка: не найден ваш часовой пояс. Пожалуйста, установите его через /set_timezone.",
@@ -109,8 +137,6 @@ async def reminder_set_daily_time(update: Update, context: ContextTypes.DEFAULT_
         )
         return ConversationHandler.END
 
-    # --- Сохранение настроек в БД ---
-    # TODO (DB Schema): Убедиться, что upsert_daily_reminder_settings соответствует схеме
     try:
         await db.upsert_daily_reminder_settings(pool, user_id, target_local_time, user_tz_str, active=True)
         logger.info(f"Настройки ежедневного напоминания для {user_id} сохранены: {target_local_time} {user_tz_str}")
@@ -119,9 +145,7 @@ async def reminder_set_daily_time(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("Произошла ошибка при сохранении настроек. Попробуйте позже.")
         return ConversationHandler.END
 
-    # --- Планирование задачи через наш модуль scheduler ---
     try:
-        # Передаем application из context
         await scheduler.schedule_user_daily_reminder(context.application, user_id, target_local_time, user_zone)
         await update.message.reply_text(
             f"Отлично! Ежедневное напоминание установлено на {target_time_str} по вашему времени ({user_tz_str}).",
@@ -129,7 +153,6 @@ async def reminder_set_daily_time(update: Update, context: ContextTypes.DEFAULT_
         )
         return ConversationHandler.END
     except Exception as e:
-        # Ошибка планирования уже залогирована в schedule_user_daily_reminder
         await update.message.reply_text(
             "Произошла ошибка при установке напоминания. Настройки сохранены, но напоминание может не работать. Попробуйте настроить позже.",
              reply_markup=MAIN_MENU_KEYBOARD
