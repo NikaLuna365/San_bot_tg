@@ -1,9 +1,10 @@
 # db.py
 import asyncpg
 import os
-from datetime import date, time
+from datetime import date, time, datetime # Добавлен datetime
 from typing import List, Dict, Any, Optional
 import logging
+import json # Добавлен json для работы с JSONB
 
 logger = logging.getLogger(__name__)
 
@@ -17,25 +18,21 @@ async def create_db_pool() -> Optional[asyncpg.pool.Pool]:
     try:
         pool = await asyncpg.create_pool(DATABASE_URL)
         logger.info("Пул соединений с БД успешно создан.")
-        # TODO (DB Schema): Добавить проверку и создание таблиц, если их нет
+        # Можно добавить проверку/создание таблиц здесь при желании,
+        # но мы уже сделали это вручную.
         # await setup_database(pool)
         return pool
     except Exception as e:
         logger.exception("Ошибка при создании пула соединений с БД.")
         return None
 
-# TODO (DB Schema): Пересмотреть схему БД и обновить функции ниже
-# для поддержки хранения часовых поясов и локального времени пользователя.
-
 # --- Настройки Пользователя (Часовой пояс) ---
+# Эти функции остаются без изменений, т.к. таблица user_settings подходит
 
 async def set_user_timezone(pool: asyncpg.pool.Pool, user_id: int, timezone: str) -> None:
     """Сохраняет или обновляет часовой пояс пользователя."""
-    # TODO (DB Schema): Нужна таблица user_settings(user_id PK, timezone VARCHAR)
-    # или добавить столбец timezone в существующую таблицу пользователей.
     async with pool.acquire() as conn:
         try:
-            # Пример запроса (нужно адаптировать под вашу схему)
             await conn.execute(
                  """
                  INSERT INTO user_settings (user_id, timezone) VALUES ($1, $2)
@@ -50,7 +47,6 @@ async def set_user_timezone(pool: asyncpg.pool.Pool, user_id: int, timezone: str
 
 async def get_user_timezone(pool: asyncpg.pool.Pool, user_id: int) -> Optional[str]:
     """Получает часовой пояс пользователя."""
-    # TODO (DB Schema): Адаптировать запрос под вашу схему.
     async with pool.acquire() as conn:
         try:
             result = await conn.fetchval(
@@ -60,12 +56,10 @@ async def get_user_timezone(pool: asyncpg.pool.Pool, user_id: int) -> Optional[s
             return result
         except Exception as e:
             logger.exception(f"Ошибка при получении часового пояса для {user_id}")
-            return None # Важно возвращать None при ошибке
+            return None
 
 # --- Ежедневные напоминания ---
-# TODO (DB Schema): Изменить схему daily_reminders:
-# user_id PK, target_local_time TIME, timezone VARCHAR, active BOOLEAN
-# Удалить last_sent, reminder_time (старое)
+# Эти функции остаются без изменений, т.к. таблица daily_reminders подходит
 
 async def upsert_daily_reminder_settings(
     pool: asyncpg.pool.Pool, user_id: int, target_local_time: time, timezone: str, active: bool = True
@@ -90,20 +84,14 @@ async def upsert_daily_reminder_settings(
             raise
 
 async def get_active_daily_reminders(pool: asyncpg.pool.Pool) -> List[asyncpg.Record]:
-    """Получает список активных ежедневных напоминаний (данные для пересчета)."""
+    """Получает список активных ежедневных напоминаний."""
     async with pool.acquire() as conn:
-        # Возвращаем данные, нужные для расчета следующего запуска в scheduler.py
         return await conn.fetch(
             "SELECT user_id, target_local_time, timezone FROM daily_reminders WHERE active = true"
         )
 
-# Функции update_last_sent_daily больше не нужны для планирования
-
 # --- Запланированные ретроспективы ---
-# TODO (DB Schema): Изменить схему scheduled_retrospectives:
-# user_id PK, scheduled_day SMALLINT, target_local_time TIME, timezone VARCHAR,
-# retrospective_type VARCHAR, active BOOLEAN
-# Удалить local_time, server_time, last_sent
+# Эти функции остаются без изменений, т.к. таблица scheduled_retrospectives подходит
 
 async def upsert_scheduled_retrospective_settings(
     pool: asyncpg.pool.Pool, user_id: int, scheduled_day: int, target_local_time: time,
@@ -132,7 +120,7 @@ async def upsert_scheduled_retrospective_settings(
             raise
 
 async def get_active_scheduled_retrospectives(pool: asyncpg.pool.Pool) -> List[asyncpg.Record]:
-    """Получает список активных запланированных ретроспектив (данные для пересчета)."""
+    """Получает список активных запланированных ретроспектив."""
     async with pool.acquire() as conn:
         return await conn.fetch(
             """
@@ -141,16 +129,103 @@ async def get_active_scheduled_retrospectives(pool: asyncpg.pool.Pool) -> List[a
             """
         )
 
-# Функции update_last_sent_scheduled_retrospective больше не нужны для планирования
+# --- НОВОЕ: Функции для сохранения/чтения данных тестов ---
 
-# Старые функции weekly_retrospectives можно удалить, если они больше не используются.
-# async def upsert_weekly_retrospective(...)
-# async def get_active_weekly_retrospectives(...)
-# async def update_last_sent_weekly(...)
+async def save_test_result(
+    pool: asyncpg.pool.Pool,
+    user_id: int,
+    timestamp: datetime,
+    weekday: int,
+    fixed_answers: Dict[str, Any],
+    open_answers: Dict[str, Any],
+    interpretation: Optional[str]
+) -> Optional[int]:
+    """Сохраняет результаты одного теста в БД и возвращает test_id."""
+    # Преобразуем словари в JSON строки для записи в JSONB
+    fixed_answers_json = json.dumps(fixed_answers, ensure_ascii=False)
+    open_answers_json = json.dumps(open_answers, ensure_ascii=False)
 
-# --- Функции для сохранения/чтения данных тестов/ретроспектив ---
-# TODO (Data Storage): Эти функции нужно будет добавить/изменить при переносе
-# данных из JSON в БД. Пока оставляем как есть (работа с файлами будет в хендлерах).
-# async def save_test_results(pool, user_id, timestamp, answers, interpretation): ...
-# async def get_test_results_for_period(pool, user_id, start_date, end_date): ...
-# async def save_retrospective_results(pool, user_id, timestamp, period_days, averages, open_answers, interpretation): ...
+    async with pool.acquire() as conn:
+        try:
+            # Используем RETURNING test_id для получения ID вставленной записи
+            test_id = await conn.fetchval(
+                """
+                INSERT INTO tests (user_id, timestamp, weekday, fixed_answers, open_answers, interpretation)
+                VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)
+                RETURNING test_id
+                """,
+                user_id, timestamp, weekday, fixed_answers_json, open_answers_json, interpretation
+            )
+            logger.info(f"Результат теста для user {user_id} сохранен в БД с test_id={test_id}")
+            return test_id
+        except Exception as e:
+            logger.exception(f"Ошибка при сохранении результата теста для user {user_id} в БД")
+            return None
+
+async def update_test_interpretation(pool: asyncpg.pool.Pool, test_id: int, interpretation: str) -> None:
+    """Обновляет поле interpretation для существующего теста."""
+    async with pool.acquire() as conn:
+        try:
+            await conn.execute(
+                "UPDATE tests SET interpretation = $1 WHERE test_id = $2",
+                interpretation, test_id
+            )
+            logger.info(f"Интерпретация для test_id={test_id} обновлена в БД.")
+        except Exception as e:
+            logger.exception(f"Ошибка при обновлении интерпретации для test_id={test_id} в БД")
+            # Не пробрасываем ошибку дальше, т.к. это не критично для пользователя
+
+async def get_test_results_for_period(pool: asyncpg.pool.Pool, user_id: int, start_date: datetime, end_date: datetime) -> List[asyncpg.Record]:
+    """Получает результаты тестов пользователя за указанный период UTC."""
+    async with pool.acquire() as conn:
+        try:
+            # Выбираем только нужные поля для анализа ретроспективы
+            # asyncpg автоматически десериализует JSONB в словари Python
+            results = await conn.fetch(
+                """
+                SELECT timestamp, fixed_answers, open_answers
+                FROM tests
+                WHERE user_id = $1 AND timestamp >= $2 AND timestamp <= $3
+                ORDER BY timestamp ASC
+                """,
+                user_id, start_date, end_date
+            )
+            logger.info(f"Найдено {len(results)} тестов для user {user_id} в БД за период {start_date.date()} - {end_date.date()}")
+            return results
+        except Exception as e:
+            logger.exception(f"Ошибка при получении результатов тестов для user {user_id} из БД")
+            return [] # Возвращаем пустой список при ошибке
+
+# --- НОВОЕ: Функции для сохранения/чтения данных ретроспектив ---
+
+async def save_retrospective_result(
+    pool: asyncpg.pool.Pool,
+    user_id: int,
+    timestamp: datetime,
+    period_days: int,
+    test_count: int,
+    averages: Dict[str, Optional[float]],
+    open_answers: Dict[str, Any],
+    interpretation: Optional[str]
+) -> Optional[int]:
+    """Сохраняет результаты ретроспективы в БД."""
+    averages_json = json.dumps(averages, ensure_ascii=False, default=str) # default=str для None
+    open_answers_json = json.dumps(open_answers, ensure_ascii=False)
+
+    async with pool.acquire() as conn:
+        try:
+            retro_id = await conn.fetchval(
+                """
+                INSERT INTO retrospectives (user_id, timestamp, period_days, test_count, averages, open_answers, interpretation)
+                VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7)
+                RETURNING retro_id
+                """,
+                user_id, timestamp, period_days, test_count, averages_json, open_answers_json, interpretation
+            )
+            logger.info(f"Результат ретроспективы для user {user_id} сохранен в БД с retro_id={retro_id}")
+            return retro_id
+        except Exception as e:
+            logger.exception(f"Ошибка при сохранении результата ретроспективы для user {user_id} в БД")
+            return None
+
+# (Функции чтения ретроспектив пока не требуются, но можно добавить по аналогии, если нужно будет их где-то показывать)
