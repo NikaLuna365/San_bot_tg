@@ -27,12 +27,24 @@ async def create_db_pool() -> Optional[asyncpg.pool.Pool]:
         return None
 
 # --- Настройки Пользователя (Часовой пояс) ---
-# Эти функции остаются без изменений, т.к. таблица user_settings подходит
 
 async def set_user_timezone(pool: asyncpg.pool.Pool, user_id: int, timezone: str) -> None:
     """Сохраняет или обновляет часовой пояс пользователя."""
     async with pool.acquire() as conn:
         try:
+            # Проверяем, существует ли пользователь, чтобы избежать ошибки FK
+            exists = await conn.fetchval("SELECT EXISTS(SELECT 1 FROM user_settings WHERE user_id = $1)", user_id)
+            if not exists:
+                # Если пользователя нет, создаем его перед добавлением теста/ретро
+                # Это может произойти, если пользователь начал с теста/ретро, не установив TZ
+                # Устанавливаем пустой TZ, чтобы запись была
+                await conn.execute(
+                    "INSERT INTO user_settings (user_id, timezone) VALUES ($1, NULL)",
+                    user_id
+                )
+                logger.warning(f"Создана запись в user_settings для user {user_id} при установке TZ (ранее не существовала).")
+
+            # Теперь обновляем или вставляем (если вдруг создали только что с NULL)
             await conn.execute(
                  """
                  INSERT INTO user_settings (user_id, timezone) VALUES ($1, $2)
@@ -59,7 +71,6 @@ async def get_user_timezone(pool: asyncpg.pool.Pool, user_id: int) -> Optional[s
             return None
 
 # --- Ежедневные напоминания ---
-# Эти функции остаются без изменений, т.к. таблица daily_reminders подходит
 
 async def upsert_daily_reminder_settings(
     pool: asyncpg.pool.Pool, user_id: int, target_local_time: time, timezone: str, active: bool = True
@@ -90,8 +101,16 @@ async def get_active_daily_reminders(pool: asyncpg.pool.Pool) -> List[asyncpg.Re
             "SELECT user_id, target_local_time, timezone FROM daily_reminders WHERE active = true"
         )
 
+async def get_user_reminder_settings(pool: asyncpg.pool.Pool, user_id: int) -> Optional[asyncpg.Record]:
+    """Получает настройки ежедневного напоминания для одного пользователя."""
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            # Добавили user_id в SELECT, может пригодиться
+            "SELECT user_id, target_local_time, timezone, active FROM daily_reminders WHERE user_id = $1",
+            user_id
+        )
+
 # --- Запланированные ретроспективы ---
-# Эти функции остаются без изменений, т.к. таблица scheduled_retrospectives подходит
 
 async def upsert_scheduled_retrospective_settings(
     pool: asyncpg.pool.Pool, user_id: int, scheduled_day: int, target_local_time: time,
@@ -111,6 +130,7 @@ async def upsert_scheduled_retrospective_settings(
                     timezone = EXCLUDED.timezone,
                     retrospective_type = EXCLUDED.retrospective_type,
                     active = EXCLUDED.active
+                    -- last_sent_timestamp не сбрасываем при изменении настроек
                 """,
                 user_id, scheduled_day, target_local_time, timezone, retrospective_type, active
             )
@@ -120,16 +140,42 @@ async def upsert_scheduled_retrospective_settings(
             raise
 
 async def get_active_scheduled_retrospectives(pool: asyncpg.pool.Pool) -> List[asyncpg.Record]:
-    """Получает список активных запланированных ретроспектив."""
+    """Получает список активных запланированных ретроспектив (данные для пересчета)."""
     async with pool.acquire() as conn:
+        # ИЗМЕНЕНО: Добавлено last_sent_timestamp
         return await conn.fetch(
             """
-            SELECT user_id, scheduled_day, target_local_time, timezone, retrospective_type
+            SELECT user_id, scheduled_day, target_local_time, timezone, retrospective_type, last_sent_timestamp
             FROM scheduled_retrospectives WHERE active = true
             """
         )
 
-# --- НОВОЕ: Функции для сохранения/чтения данных тестов ---
+async def get_user_retrospective_settings(pool: asyncpg.pool.Pool, user_id: int) -> Optional[asyncpg.Record]:
+    """Получает настройки запланированной ретроспективы для одного пользователя."""
+    async with pool.acquire() as conn:
+        # Добавили user_id в SELECT
+        return await conn.fetchrow(
+            """
+            SELECT user_id, scheduled_day, target_local_time, timezone, retrospective_type, active, last_sent_timestamp
+            FROM scheduled_retrospectives WHERE user_id = $1
+            """,
+            user_id
+        )
+
+async def update_last_sent_scheduled_retrospective(pool: asyncpg.pool.Pool, user_id: int, timestamp: datetime) -> None:
+    """Обновляет время последней отправки запланированной ретроспективы."""
+    async with pool.acquire() as conn:
+        try:
+            await conn.execute(
+                "UPDATE scheduled_retrospectives SET last_sent_timestamp = $1 WHERE user_id = $2",
+                timestamp, user_id
+            )
+            logger.info(f"Обновлено last_sent_timestamp для ретроспективы user {user_id}")
+        except Exception as e:
+            logger.exception(f"Ошибка обновления last_sent_timestamp для ретроспективы user {user_id}")
+            # Не пробрасываем ошибку дальше, так как это может прервать работу планировщика
+
+# --- Функции для сохранения/чтения данных тестов ---
 
 async def save_test_result(
     pool: asyncpg.pool.Pool,
@@ -141,12 +187,14 @@ async def save_test_result(
     interpretation: Optional[str]
 ) -> Optional[int]:
     """Сохраняет результаты одного теста в БД и возвращает test_id."""
-    # Преобразуем словари в JSON строки для записи в JSONB
     fixed_answers_json = json.dumps(fixed_answers, ensure_ascii=False)
     open_answers_json = json.dumps(open_answers, ensure_ascii=False)
 
     async with pool.acquire() as conn:
         try:
+            # Проверяем/создаем пользователя в user_settings, если его нет (для FK)
+            await ensure_user_exists(conn, user_id)
+
             # Используем RETURNING test_id для получения ID вставленной записи
             test_id = await conn.fetchval(
                 """
@@ -158,6 +206,9 @@ async def save_test_result(
             )
             logger.info(f"Результат теста для user {user_id} сохранен в БД с test_id={test_id}")
             return test_id
+        except ForeignKeyViolationError as fke:
+            logger.error(f"Ошибка внешнего ключа при сохранении теста для user {user_id}. Пользователь не найден в user_settings? Ошибка: {fke}")
+            return None
         except Exception as e:
             logger.exception(f"Ошибка при сохранении результата теста для user {user_id} в БД")
             return None
@@ -173,14 +224,11 @@ async def update_test_interpretation(pool: asyncpg.pool.Pool, test_id: int, inte
             logger.info(f"Интерпретация для test_id={test_id} обновлена в БД.")
         except Exception as e:
             logger.exception(f"Ошибка при обновлении интерпретации для test_id={test_id} в БД")
-            # Не пробрасываем ошибку дальше, т.к. это не критично для пользователя
 
 async def get_test_results_for_period(pool: asyncpg.pool.Pool, user_id: int, start_date: datetime, end_date: datetime) -> List[asyncpg.Record]:
     """Получает результаты тестов пользователя за указанный период UTC."""
     async with pool.acquire() as conn:
         try:
-            # Выбираем только нужные поля для анализа ретроспективы
-            # asyncpg автоматически десериализует JSONB в словари Python
             results = await conn.fetch(
                 """
                 SELECT timestamp, fixed_answers, open_answers
@@ -194,9 +242,9 @@ async def get_test_results_for_period(pool: asyncpg.pool.Pool, user_id: int, sta
             return results
         except Exception as e:
             logger.exception(f"Ошибка при получении результатов тестов для user {user_id} из БД")
-            return [] # Возвращаем пустой список при ошибке
+            return []
 
-# --- НОВОЕ: Функции для сохранения/чтения данных ретроспектив ---
+# --- Функции для сохранения/чтения данных ретроспектив ---
 
 async def save_retrospective_result(
     pool: asyncpg.pool.Pool,
@@ -209,11 +257,14 @@ async def save_retrospective_result(
     interpretation: Optional[str]
 ) -> Optional[int]:
     """Сохраняет результаты ретроспективы в БД."""
-    averages_json = json.dumps(averages, ensure_ascii=False, default=str) # default=str для None
+    averages_json = json.dumps(averages, ensure_ascii=False, default=str)
     open_answers_json = json.dumps(open_answers, ensure_ascii=False)
 
     async with pool.acquire() as conn:
         try:
+            # Проверяем/создаем пользователя в user_settings, если его нет (для FK)
+            await ensure_user_exists(conn, user_id)
+
             retro_id = await conn.fetchval(
                 """
                 INSERT INTO retrospectives (user_id, timestamp, period_days, test_count, averages, open_answers, interpretation)
@@ -224,8 +275,32 @@ async def save_retrospective_result(
             )
             logger.info(f"Результат ретроспективы для user {user_id} сохранен в БД с retro_id={retro_id}")
             return retro_id
+        except ForeignKeyViolationError as fke:
+            logger.error(f"Ошибка внешнего ключа при сохранении ретроспективы для user {user_id}. Пользователь не найден в user_settings? Ошибка: {fke}")
+            return None
         except Exception as e:
             logger.exception(f"Ошибка при сохранении результата ретроспективы для user {user_id} в БД")
             return None
 
-# (Функции чтения ретроспектив пока не требуются, но можно добавить по аналогии, если нужно будет их где-то показывать)
+# --- Вспомогательная функция для FK ---
+async def ensure_user_exists(conn: asyncpg.Connection, user_id: int):
+    """Проверяет наличие пользователя в user_settings и создает запись, если её нет."""
+    exists = await conn.fetchval("SELECT EXISTS(SELECT 1 FROM user_settings WHERE user_id = $1)", user_id)
+    if not exists:
+        try:
+            # Устанавливаем пустой TZ, чтобы запись была
+            await conn.execute(
+                "INSERT INTO user_settings (user_id, timezone) VALUES ($1, NULL)",
+                user_id
+            )
+            logger.warning(f"Создана запись в user_settings для user {user_id} при сохранении теста/ретроспективы (ранее не существовала).")
+        except Exception as ie:
+             # Ловим возможную гонку потоков, если другой запрос уже создал пользователя
+             if isinstance(ie, asyncpg.exceptions.UniqueViolationError):
+                 logger.info(f"Пользователь {user_id} уже был создан в user_settings (возможная гонка потоков).")
+             else:
+                 logger.exception(f"Не удалось создать пользователя {user_id} в user_settings перед вставкой.")
+                 raise # Перевыбрасываем, если это не гонка потоков
+
+# Импортируем ошибки asyncpg для более точной обработки
+from asyncpg.exceptions import ForeignKeyViolationError, UniqueViolationError
