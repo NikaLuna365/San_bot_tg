@@ -3,14 +3,14 @@ import logging
 import asyncio
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from typing import Dict, Any, Coroutine
+from typing import Dict, Any, Coroutine, Optional # Добавлен Optional
 
 from telegram.ext import Application, CallbackContext, Job
 
 # --- ИЗМЕНЕНО: Абсолютный импорт ---
 import db # Импортируем модуль db
 from utils import get_now_utc # Импортируем из utils
-from constants import CANCEL_KEYBOARD # Импортируем из constants
+# from constants import CANCEL_KEYBOARD # Этот импорт здесь больше не нужен
 
 logger = logging.getLogger(__name__)
 
@@ -35,16 +35,14 @@ async def send_daily_reminder(context: CallbackContext) -> None:
             # Можно добавить кнопку для быстрого старта теста
             # reply_markup=ReplyKeyboardMarkup([["Пройти тест"], ["Главное меню"]], resize_keyboard=True)
         )
-        # TODO (DB Schema): Обновлять last_sent в БД не обязательно, но можно для статистики
-        # pool = context.bot_data.get("db_pool")
-        # if pool: await db.update_last_sent_daily(pool, user_id, get_today_utc())
+        # Обновлять last_sent в БД больше не нужно
     except Exception as e:
         # Логируем ошибку, но не останавливаем работу планировщика
         logger.exception(f"Ошибка при отправке ежедневного напоминания пользователю {user_id}")
 
 
 async def send_retrospective_notification(context: CallbackContext) -> None:
-    """Отправляет напоминание о запланированной ретроспективе."""
+    """Отправляет напоминание о запланированной ретроспективе и обновляет last_sent."""
     job = context.job
     if not job or not isinstance(job.data, dict):
          logger.error("Не удалось получить данные из job в send_retrospective_notification")
@@ -67,9 +65,17 @@ async def send_retrospective_notification(context: CallbackContext) -> None:
             # Можно добавить кнопку для быстрого старта
             # reply_markup=ReplyKeyboardMarkup([["Начать ретроспективу"], ["Главное меню"]], resize_keyboard=True)
         )
-        # TODO (DB Schema): Обновлять last_sent в БД не обязательно
-        # pool = context.bot_data.get("db_pool")
-        # if pool: await db.update_last_sent_scheduled_retrospective(pool, user_id, get_today_utc())
+
+        # --- ИЗМЕНЕНО: Обновляем last_sent_timestamp в БД ---
+        pool = context.bot_data.get("db_pool")
+        if pool and user_id:
+             try:
+                  await db.update_last_sent_scheduled_retrospective(pool, user_id, get_now_utc())
+             except Exception as e:
+                  # Ошибка уже залогирована в db.py, здесь просто пишем для контекста
+                  logger.error(f"Не удалось обновить last_sent_timestamp для ретроспективы user {user_id} после отправки уведомления.")
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
     except Exception as e:
         logger.exception(f"Ошибка при отправке уведомления о ретроспективе пользователю {user_id}")
 
@@ -83,9 +89,9 @@ def _calculate_next_run_utc(target_local_time: time, user_zone: ZoneInfo) -> dat
 
     # Составляем сегодняшнюю дату и целевое время в ЛОКАЛЬНОЙ зоне
     next_run_local = datetime.combine(
-        now_local.date(), # Берем сегодняшнюю дату
-        target_local_time, # Берем целевое время
-        tzinfo=user_zone   # Устанавливаем часовой пояс
+        now_local.date(),
+        target_local_time,
+        tzinfo=user_zone
     )
 
     # Если сегодня это время уже прошло, берем завтра
@@ -95,8 +101,9 @@ def _calculate_next_run_utc(target_local_time: time, user_zone: ZoneInfo) -> dat
     # Конвертируем обратно в UTC для планировщика
     return next_run_local.astimezone(timezone.utc)
 
+# --- ИЗМЕНЕНО: Добавлен last_sent_timestamp и логика для biweekly ---
 def _calculate_next_retro_run_utc(
-    scheduled_day: int, target_local_time: time, user_zone: ZoneInfo, mode: str
+    scheduled_day: int, target_local_time: time, user_zone: ZoneInfo, mode: str, last_sent_timestamp: Optional[datetime] = None
 ) -> datetime:
     """Рассчитывает следующее время запуска для еженедельных/двухнедельных задач."""
     now_utc = get_now_utc()
@@ -110,18 +117,36 @@ def _calculate_next_retro_run_utc(
     )
 
     days_ahead = scheduled_day - target_dt_local_today.weekday()
-    # Если нужный день недели уже прошел на этой неделе ИЛИ
-    # если сегодня нужный день недели, но время уже прошло
     if days_ahead < 0 or (days_ahead == 0 and target_dt_local_today <= now_local):
         days_ahead += 7 # Переносим на следующую неделю
 
     # Дата и время следующего запуска в локальной зоне
     next_run_local = target_dt_local_today + timedelta(days=days_ahead)
 
-    # Для двухнедельной ретроспективы нужно убедиться, что мы не пропускаем неделю.
-    # Это требует хранения даты последнего запуска или эталонной даты.
-    # Пока оставляем простой вариант - планирование на ближайший подходящий день.
-    # Если требуется строгая двухнедельная периодичность, логику нужно усложнить.
+    # --- НОВОЕ: Коррекция для biweekly ---
+    if mode == "biweekly" and last_sent_timestamp:
+        # Убедимся, что last_sent_timestamp имеет tzinfo (должен быть UTC из БД)
+        if last_sent_timestamp.tzinfo is None:
+           try:
+               # Попытка установить UTC, если из БД пришло без TZ (маловероятно с TIMESTAMPTZ)
+               last_sent_timestamp = last_sent_timestamp.replace(tzinfo=timezone.utc)
+               logger.warning("last_sent_timestamp из БД не имел таймзоны, установлен UTC.")
+           except Exception: # На случай, если replace не сработает для какого-то типа
+                logger.error("Не удалось установить UTC для last_sent_timestamp, точность biweekly может быть нарушена.")
+                last_sent_timestamp = None # Сбрасываем, чтобы не использовать некорректное значение
+
+        if last_sent_timestamp: # Проверяем снова после возможной установки TZ
+            # Целевое время + 14 дней от последней отправки (в UTC)
+            target_next_run_utc = last_sent_timestamp + timedelta(weeks=2)
+            # Рассчитанное время запуска (в UTC)
+            current_calculated_run_utc = next_run_local.astimezone(timezone.utc)
+
+            # Если рассчитанное время раньше, чем целевое + 14 дней (т.е. мы на "неправильной" неделе)
+            # Добавляем допуск в несколько минут на случай небольших расхождений
+            if current_calculated_run_utc < target_next_run_utc - timedelta(minutes=5):
+                logger.info(f"Коррекция biweekly: {current_calculated_run_utc.strftime('%Y-%m-%d %H:%M')} < {target_next_run_utc.strftime('%Y-%m-%d %H:%M')}. Добавляем 7 дней.")
+                next_run_local += timedelta(days=7)
+    # --- КОНЕЦ КОРРЕКЦИИ ---
 
     # Конвертируем в UTC
     return next_run_local.astimezone(timezone.utc)
@@ -132,11 +157,10 @@ async def schedule_user_daily_reminder(
 ):
     """Планирует или перепланирует ежедневное напоминание для пользователя."""
     job_name = f"daily_{user_id}"
-    # Получаем JobQueue из application
     job_queue = app.job_queue
     if not job_queue:
         logger.error(f"JobQueue не найден в application при планировании для {user_id}")
-        return # Не можем планировать без job_queue
+        return
 
     # Удаляем старую задачу, если она есть
     current_jobs = job_queue.get_jobs_by_name(job_name)
@@ -146,24 +170,24 @@ async def schedule_user_daily_reminder(
 
     try:
         next_run_utc = _calculate_next_run_utc(target_local_time, user_zone)
-        # Планируем через job_queue
         job_queue.run_repeating(
             send_daily_reminder,
             interval=timedelta(days=1),
-            first=next_run_utc, # Используем рассчитанное UTC время
+            first=next_run_utc,
             data={'user_id': user_id},
             name=job_name
         )
-        logger.info(f"Запланировано ежедневное напоминание для {user_id} на {next_run_utc} (UTC)")
+        logger.info(f"Запланировано ежедневное напоминание для {user_id} на {next_run_utc.strftime('%Y-%m-%d %H:%M')} (UTC)")
     except Exception as e:
         logger.exception(f"Ошибка планирования ежедневного напоминания для {user_id}")
-        # Перевыбрасываем исключение, чтобы вызывающая функция могла его обработать
         raise
 
 
 async def schedule_user_retrospective(
     app: Application, user_id: int, scheduled_day: int, target_local_time: time,
     user_zone: ZoneInfo, mode: str # 'weekly' or 'biweekly'
+    # last_sent_timestamp не нужен как аргумент, функция расчета сама его получит из БД при необходимости,
+    # если вызывать ее из load_and_schedule_retrospectives
 ):
     """Планирует или перепланирует запланированную ретроспективу."""
     job_name = f"retro_{mode}_{user_id}"
@@ -173,15 +197,27 @@ async def schedule_user_retrospective(
         return
 
     # Удаляем старые задачи (на всякий случай, если режим изменился или задача дублируется)
+    # Важно удалять задачи и для weekly, и для biweekly, если пользователь сменил режим
     for old_mode in ["weekly", "biweekly"]:
         old_job_name = f"retro_{old_mode}_{user_id}"
         current_jobs = job_queue.get_jobs_by_name(old_job_name)
         for job in current_jobs:
             job.schedule_removal()
-            logger.info(f"Удалена старая задача {old_job_name}")
+            logger.info(f"Удалена старая задача {old_job_name} при планировании {mode} для {user_id}")
 
     try:
-        next_run_utc = _calculate_next_retro_run_utc(scheduled_day, target_local_time, user_zone, mode)
+        # --- ИЗМЕНЕНО: Получаем last_sent_timestamp из БД перед расчетом ---
+        last_sent_ts = None
+        pool = app.bot_data.get("db_pool")
+        if pool and mode == "biweekly": # Получаем только если нужно для biweekly
+             settings = await db.get_user_retrospective_settings(pool, user_id)
+             if settings:
+                 last_sent_ts = settings.get("last_sent_timestamp") # asyncpg Record работает как dict
+                 logger.debug(f"Получен last_sent_timestamp={last_sent_ts} для user {user_id} при планировании.")
+
+        next_run_utc = _calculate_next_retro_run_utc(scheduled_day, target_local_time, user_zone, mode, last_sent_ts)
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
         interval_weeks = 1 if mode == "weekly" else 2
         job_queue.run_repeating(
             send_retrospective_notification,
@@ -190,7 +226,7 @@ async def schedule_user_retrospective(
             data={'user_id': user_id, 'mode': mode},
             name=job_name
         )
-        logger.info(f"Запланирована {mode} ретроспектива для {user_id} на {next_run_utc} (UTC)")
+        logger.info(f"Запланирована {mode} ретроспектива для {user_id} на {next_run_utc.strftime('%Y-%m-%d %H:%M')} (UTC)")
     except Exception as e:
         logger.exception(f"Ошибка планирования {mode} ретроспективы для {user_id}")
         raise
@@ -214,7 +250,6 @@ async def load_and_schedule_reminders(app: Application) -> None:
             target_local_time = r["target_local_time"] # Ожидаем тип time
             tz_str = r["timezone"]
 
-            # Проверки типов и значений
             if not isinstance(target_local_time, time):
                  logger.warning(f"Неверный формат target_local_time для user {user_id}: {target_local_time} (тип: {type(target_local_time)})")
                  continue
@@ -224,14 +259,12 @@ async def load_and_schedule_reminders(app: Application) -> None:
 
             try:
                 user_zone = ZoneInfo(tz_str)
-                # Планируем задачу
                 await schedule_user_daily_reminder(app, user_id, target_local_time, user_zone)
                 count += 1
             except ZoneInfoNotFoundError:
                 logger.error(f"Неверный часовой пояс '{tz_str}' для user {user_id} в БД при загрузке напоминания.")
             except Exception as e:
-                # Ошибка уже залогирована внутри schedule_user_daily_reminder
-                logger.error(f"Не удалось запланировать напоминание для user {user_id} при старте.")
+                logger.error(f"Не удалось запланировать напоминание для user {user_id} при старте.", exc_info=True)
         logger.info(f"Успешно запланировано {count} из {len(reminders)} ежедневных напоминаний.")
 
     except Exception as e:
@@ -246,6 +279,7 @@ async def load_and_schedule_retrospectives(app: Application) -> None:
         return
 
     try:
+        # Используем обновленную функцию DB, которая возвращает last_sent_timestamp
         retrospectives = await db.get_active_scheduled_retrospectives(pool)
         logger.info(f"Загружено {len(retrospectives)} активных запланированных ретроспектив из БД.")
         count = 0
@@ -255,8 +289,10 @@ async def load_and_schedule_retrospectives(app: Application) -> None:
             target_local_time = r["target_local_time"]
             tz_str = r["timezone"]
             mode = r["retrospective_type"] # 'weekly' or 'biweekly'
+            # ИЗМЕНЕНО: Получаем last_sent_timestamp
+            last_sent_ts = r["last_sent_timestamp"]
 
-            # Проверки
+            # Проверки (как были)
             if not isinstance(target_local_time, time):
                  logger.warning(f"Неверный формат target_local_time для ретроспективы user {user_id}: {target_local_time} (тип: {type(target_local_time)})")
                  continue
@@ -272,12 +308,16 @@ async def load_and_schedule_retrospectives(app: Application) -> None:
 
             try:
                 user_zone = ZoneInfo(tz_str)
-                await schedule_user_retrospective(app, user_id, scheduled_day, target_local_time, user_zone, mode)
+                # --- ИЗМЕНЕНО: Вызов schedule_user_retrospective теперь не требует last_sent_timestamp,
+                # так как он сам получит его из БД перед вызовом _calculate_next_retro_run_utc ---
+                await schedule_user_retrospective(
+                    app, user_id, scheduled_day, target_local_time, user_zone, mode
+                )
                 count += 1
             except ZoneInfoNotFoundError:
                 logger.error(f"Неверный часовой пояс '{tz_str}' для ретроспективы user {user_id} в БД при загрузке.")
             except Exception as e:
-                logger.error(f"Не удалось запланировать ретроспективу для user {user_id} при старте.")
+                logger.error(f"Не удалось запланировать ретроспективу для user {user_id} при старте.", exc_info=True)
         logger.info(f"Успешно запланировано {count} из {len(retrospectives)} ретроспектив.")
 
     except Exception as e:
