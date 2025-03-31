@@ -2,7 +2,7 @@
 import os
 import logging
 import asyncio
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional # Добавлен Optional
 
 from google.generativeai import GenerativeModel, configure, types
 
@@ -11,29 +11,30 @@ from constants import WEEKDAY_FIXED_QUESTIONS, OPEN_QUESTIONS, RETRO_OPEN_QUESTI
 
 logger = logging.getLogger(__name__)
 
-# Настройка Gemini API ключа
+# Настройка Gemini API ключа (без изменений)
 API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
     logger.warning("GEMINI_API_KEY не задан в переменных окружения. Функции AI не будут работать.")
     try:
-        configure(api_key="DUMMY_KEY_NEEDS_REPLACEMENT")
+        configure(api_key="DUMMY_KEY_NEEDS_REPLACEMENT") # Пытаемся сконфигурировать с пустышкой
     except Exception as e:
-        logger.error(f"Failed to configure Gemini with dummy key: {e}")
+        logger.error(f"Не удалось сконфигурировать Gemini даже с пустым ключом: {e}")
 else:
      try:
         configure(api_key=API_KEY)
         logger.info("Gemini API ключ успешно сконфигурирован.")
      except Exception as e:
-        logger.error(f"Failed to configure Gemini with provided key: {e}")
-        API_KEY = None
+        logger.error(f"Не удалось сконфигурировать Gemini с предоставленным ключом: {e}")
+        API_KEY = None # Считаем ключ невалидным
 
-# Выбор модели (можно вынести в .env)
+# Выбор модели (без изменений)
 GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash")
 
 
-# !!! ИЗМЕНЕНО: Переработан промпт для теста !!!
+# Промпт для теста (без изменений в самом промпте, он для первого ответа)
 def build_gemini_prompt_for_test(fixed_questions: List[str], test_answers: Dict[str, Any]) -> str:
-    """Строит промпт для Gemini на основе ответов на ежедневный тест."""
+    """Строит промпт для Gemini на основе ответов на ежедневный тест (для ПЕРВОГО ответа AI)."""
+    # ... (код промпта остается как был) ...
     prompt = (
         "Вы - эмпатичный и внимательный психолог-консультант. Ваш клиент только что прошёл ежедневный опрос для саморефлексии. Ваша задача - проанализировать его ответы и дать поддерживающую обратную связь.\n\n"
         "Инструкция для Вас:\n"
@@ -45,25 +46,28 @@ def build_gemini_prompt_for_test(fixed_questions: List[str], test_answers: Dict[
         "6.  **Форматирование:** НЕ используйте markdown (*, _, `) или нумерованные/маркированные списки. Ответ должен быть единым текстом.\n\n"
         "Ответы клиента:\n"
     )
-    # Добавляем фиксированные вопросы и ответы
-    for i, question in enumerate(fixed_questions, start=1):
+    # Собираем ответы в один словарь для удобства
+    all_answers_flat = test_answers # Ожидаем уже плоский словарь
+    for i in range(1, 7):
         key = f"fixed_{i}"
-        answer = test_answers.get(key, "не указано")
+        question = fixed_questions[i-1] if i-1 < len(fixed_questions) else f"Фиксированный вопрос {i}"
+        answer = all_answers_flat.get(key, "не указано")
         prompt += f"{i}. {question}\n   Ответ: {answer}\n"
-    # Добавляем открытые вопросы и ответы
-    for j, question in enumerate(OPEN_QUESTIONS, start=1):
+    for j in range(1, 3):
         key = f"open_{j}"
-        answer = test_answers.get(key, "не указано")
+        question = OPEN_QUESTIONS[j-1] if j-1 < len(OPEN_QUESTIONS) else f"Открытый вопрос {j}"
+        answer = all_answers_flat.get(key, "не указано")
         prompt += f"{len(fixed_questions) + j}. {question}\n   Ответ: {answer}\n"
 
-    logger.debug(f"Промпт для теста:\n{prompt}")
+    logger.debug(f"Промпт для теста (первичный):\n{prompt[:500]}...") # Логируем начало
     return prompt
 
-# !!! ИЗМЕНЕНО: Переработан промпт для ретроспективы !!!
+# Промпт для ретроспективы (без изменений в самом промпте, он для первого ответа)
 def build_gemini_prompt_for_retro(
     averages: Dict[str, Any], test_count: int, open_answers: Dict[str, Any], period_days: int
 ) -> str:
-    """Строит промпт для Gemini на основе данных ретроспективы."""
+    """Строит промпт для Gemini на основе данных ретроспективы (для ПЕРВОГО ответа AI)."""
+    # ... (код промпта остается как был) ...
     prompt = (
         f"Вы - вдумчивый психолог-консультант. Ваш клиент подготовил ретроспективу своего состояния за последние {period_days} дней. Ваша задача - проанализировать предоставленные данные и дать развернутую, поддерживающую обратную связь.\n\n"
         "Данные от клиента:\n"
@@ -92,43 +96,89 @@ def build_gemini_prompt_for_retro(
         "6.  **Тон:** Поддерживающий, вдумчивый, профессиональный, но человечный.\n"
         "7.  **Форматирование:** НЕ используйте markdown (*, _, `). Можно использовать абзацы для структурирования."
     )
-    logger.debug(f"Промпт для ретроспективы:\n{prompt}")
+    logger.debug(f"Промпт для ретроспективы (первичный):\n{prompt[:500]}...") # Логируем начало
     return prompt
 
-# !!! ИЗМЕНЕНО: Переработан промпт для чата после теста !!!
-def build_followup_chat_prompt(user_message: str, chat_context: str) -> str:
-    """Строит промпт для Gemini для продолжения диалога после теста."""
+
+# --- ИЗМЕНЕНО: Промпт для продолжения чата (тест) ---
+def build_followup_chat_prompt(chat_context: str, chat_history: List[Dict[str, str]]) -> str:
+    """Строит промпт для Gemini для продолжения диалога после теста, учитывая историю."""
+
+    # Формируем строку истории для промпта
+    history_str = ""
+    for msg in chat_history:
+        role = "Клиент" if msg.get("role") == "user" else "Психолог"
+        history_str += f"{role}: {msg.get('content', '')}\n"
+
     prompt = (
-        "Вы — эмпатичный психолог-консультант. Ваш клиент только что получил краткий анализ своего ежедневного опроса и теперь хочет что-то уточнить или поделиться своими мыслями.\n"
-        "Ваша задача: внимательно выслушать, отразить чувства клиента (если уместно) и задать уточняющий или поддерживающий вопрос.\n"
+        "Вы — эмпатичный психолог-консультант, продолжающий диалог с клиентом после анализа его ежедневного опроса.\n"
+        "Ваша задача: внимательно прочитать ИСТОРИЮ ДИАЛОГА и ПОСЛЕДНЕЕ СООБЩЕНИЕ КЛИЕНТА, а затем ответить поддерживающе и по существу, возможно, задав уточняющий вопрос для углубления рефлексии.\n"
+        "Крайне важно НЕ ПОВТОРЯТЬСЯ и развивать диалог, опираясь на предыдущие реплики обеих сторон.\n"
         "Обращайтесь к клиенту на «Вы». Будьте кратким и поддерживающим.\n\n"
-        f"Краткий контекст результатов теста клиента: {chat_context}\n\n"
-        "Сообщение клиента:\n"
-        f"```\n{user_message}\n```\n\n"
-        "Ваш эмпатичный ответ и/или уточняющий вопрос:"
+        f"Первоначальный контекст результатов теста клиента (только для справки): {chat_context}\n\n"
+        "ИСТОРИЯ ДИАЛОГА:\n"
+        f"{history_str}" # Включает последнее сообщение клиента
+        "\nВАШ СЛЕДУЮЩИЙ ОТВЕТ ПСИХОЛОГА:"
     )
+    logger.debug(f"Промпт для чата теста (follow-up):\n{prompt[:500]}...") # Логируем начало
     return prompt
 
-# !!! ИЗМЕНЕНО: Переработан промпт для чата после ретроспективы !!!
-def build_gemini_prompt_for_retro_chat(user_message: str, week_overview: str) -> str:
-    """Строит промпт для Gemini для продолжения диалога после ретроспективы."""
+# --- ИЗМЕНЕНО: Промпт для продолжения чата (ретроспектива) ---
+def build_gemini_prompt_for_retro_chat(week_overview: str, chat_history: List[Dict[str, str]]) -> str:
+    """Строит промпт для Gemini для продолжения диалога после ретроспективы, учитывая историю."""
+
+    # Формируем строку истории для промпта
+    history_str = ""
+    for msg in chat_history:
+        role = "Клиент" if msg.get("role") == "user" else "Психолог"
+        history_str += f"{role}: {msg.get('content', '')}\n"
+
     prompt = (
-        "Вы — психолог-консультант. Ваш клиент ознакомился с анализом своей ретроспективы и теперь задает вопрос или делится размышлениями.\n"
-        "Ваша задача: ответить по существу вопроса, опираясь на предоставленный контекст анализа, и, возможно, задать вопрос для дальнейшей рефлексии.\n"
+        "Вы — психолог-консультант, продолжающий диалог с клиентом после анализа его ретроспективы.\n"
+        "Ваша задача: внимательно прочитать ИСТОРИЮ ДИАЛОГА и ПОСЛЕДНЕЕ СООБЩЕНИЕ КЛИЕНТА, а затем ответить по существу вопроса или размышления, опираясь на контекст анализа ретроспективы и предыдущий диалог.\n"
+        "Развивайте беседу, задавайте релевантные уточняющие вопросы.\n"
         "Обращайтесь к клиенту на «Вы».\n\n"
-        f"Контекст анализа ретроспективы клиента: {week_overview}\n\n"
-        "Вопрос или сообщение клиента:\n"
-        f"```\n{user_message}\n```\n\n"
-        "Ваш ответ (по существу, с опорой на контекст, возможно, с наводящим вопросом):"
+        f"Контекст анализа ретроспективы клиента (только для справки): {week_overview}\n\n"
+        "ИСТОРИЯ ДИАЛОГА:\n"
+        f"{history_str}" # Включает последнее сообщение клиента
+        "\nВАШ СЛЕДУЮЩИЙ ОТВЕТ ПСИХОЛОГА:"
     )
+    logger.debug(f"Промпт для чата ретроспективы (follow-up):\n{prompt[:500]}...") # Логируем начало
     return prompt
 
-# Функция call_gemini_api остается без изменений по сравнению с предыдущей версией
+# --- НОВОЕ: Промпт для подведения итога/резюме чата ---
+def build_summary_prompt(chat_history: List[Dict[str, str]]) -> str:
+    """Строит промпт для Gemini для генерации резюме прошедшего диалога."""
+
+    # Формируем историю без последней реплики пользователя (просьбы об итоге)
+    history_str = ""
+    for msg in chat_history[:-1]: # Исключаем последнюю реплику
+        role = "Клиент" if msg.get("role") == "user" else "Психолог"
+        history_str += f"{role}: {msg.get('content', '')}\n"
+
+    last_user_request = chat_history[-1].get('content', '') # Последняя реплика
+
+    prompt = (
+       "Вы — ассистент психолога-консультанта.\n"
+       "Проанализируйте предоставленную историю диалога между психологом (Психолог) и клиентом (Клиент).\n"
+       f"Клиент только что попросил подвести итог (его запрос: '{last_user_request}').\n\n"
+       "Задача: Составить КРАТКОЕ (2-4 предложения) резюме ОСНОВНЫХ ТЕМ И ЧУВСТВ, обсуждавшихся в диалоге. Резюме должно быть адресовано клиенту (используйте 'Вы', 'Ваши переживания' и т.д.). НЕ включайте в резюме технические детали или сам запрос на подведение итогов.\n"
+       "Пример: 'Мы обсудили Ваши переживания по поводу [тема 1] и как это связано с [тема 2]. Вы поделились чувствами [чувство A] и [чувство B], и мы рассмотрели возможные шаги для [цель].'\n\n"
+       "ИСТОРИЯ ДИАЛОГА (без запроса на итог):\n"
+       f"{history_str}"
+       "\nВАШЕ РЕЗЮМЕ ДЛЯ КЛИЕНТА:"
+    )
+    logger.debug(f"Промпт для резюмирования чата:\n{prompt[:500]}...") # Логируем начало
+    return prompt
+
+
+# Функция вызова API (остается без изменений, но используем ключ API_KEY)
 async def call_gemini_api(prompt: str, max_tokens: int = 600) -> str:
     """Выполняет вызов Gemini API и возвращает текстовый ответ."""
-    if not API_KEY:
-        logger.error("GEMINI_API_KEY не настроен. Возвращена заглушка.")
-        return "Ошибка: Ключ Gemini API не настроен."
+    if not API_KEY: # Проверяем, успешно ли прошла конфигурация
+        logger.error("GEMINI_API_KEY не настроен или невалиден. Возвращена заглушка.")
+        # Даем более информативный ответ пользователю
+        return "Извините, функция AI временно недоступна из-за проблем с конфигурацией. Попробуйте позже."
 
     try:
         model = GenerativeModel(GEMINI_MODEL_NAME)
@@ -137,42 +187,68 @@ async def call_gemini_api(prompt: str, max_tokens: int = 600) -> str:
         generation_config = types.GenerationConfig(
             candidate_count=1,
             max_output_tokens=max_tokens,
-            temperature=0.7, # Немного повысим для большей эмпатии и вариативности
-            top_p=0.95,      # Немного снизим top_p для фокуса
+            temperature=0.7,
+            top_p=0.95,
             top_k=40
         )
 
-        response = await asyncio.to_thread(
-            model.generate_content,
+        # Используем model.generate_content_async для асинхронного вызова
+        response = await model.generate_content_async(
             contents=[prompt],
             generation_config=generation_config
+            # Добавим safety_settings для большей безопасности (пример)
+            # safety_settings=[
+            #     types.SafetySetting(
+            #         category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+            #         threshold=types.SafetySetting.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+            #     ),
+            #      types.SafetySetting(
+            #         category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+            #         threshold=types.SafetySetting.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+            #     ),
+            # ]
         )
 
         logger.debug(f"Полный ответ от Gemini: {response}")
 
+        # Проверка ответа (логика остается прежней)
         if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
              interpretation = "".join(part.text for part in response.candidates[0].content.parts)
              logger.info("Успешный ответ от Gemini получен.")
              return interpretation.strip()
         else:
+            # Логика обработки блокировок и пустого ответа (остается прежней)
              block_reason = "N/A"
              finish_reason = "N/A"
+             safety_ratings = []
              if hasattr(response, 'prompt_feedback') and response.prompt_feedback:
                  block_reason = response.prompt_feedback.block_reason
+                 safety_ratings = response.prompt_feedback.safety_ratings
              if response.candidates and hasattr(response.candidates[0], 'finish_reason'):
                   finish_reason = response.candidates[0].finish_reason
+             if response.candidates and hasattr(response.candidates[0], 'safety_ratings'):
+                  safety_ratings = response.candidates[0].safety_ratings
 
-             logger.warning(f"Ответ от Gemini не содержит текста. Причина блокировки: {block_reason}, Причина завершения: {finish_reason}")
+
+             logger.warning(f"Ответ от Gemini не содержит текста. Причина блокировки: {block_reason}, Причина завершения: {finish_reason}, Safety Ratings: {safety_ratings}")
+
+             # Сообщаем пользователю о причине блокировки, если она известна и не связана с безопасностью (SAFETY)
              if block_reason and block_reason != types.BlockReason.BLOCK_REASON_UNSPECIFIED:
-                 # Сообщаем пользователю о причине блокировки, если она известна и не связана с безопасностью (SAFETY)
+                 user_friendly_reason = str(block_reason).replace('BLOCK_REASON_', '').replace('_', ' ').capitalize()
                  # Причины SAFETY лучше не транслировать напрямую.
-                 user_friendly_reason = str(block_reason) # Можно добавить маппинг на русские сообщения
-                 if "SAFETY" in str(block_reason).upper():
-                    return "Мой ответ был заблокирован из-за внутренних правил безопасности контента. Попробуйте переформулировать."
+                 if "Safety" in user_friendly_reason:
+                    return "Мой ответ был заблокирован из-за правил безопасности контента. Пожалуйста, попробуйте переформулировать свой запрос."
                  else:
-                     return f"Запрос к AI был заблокирован по причине: {user_friendly_reason}. Попробуйте переформулировать."
-
-             else:
+                     # Другие причины (например, Other) можно показать
+                     return f"Запрос к AI был заблокирован (причина: {user_friendly_reason}). Попробуйте переформулировать."
+             # Если причина не ясна, или это просто пустой ответ
+             elif finish_reason == types.FinishReason.STOP: # Нормальное завершение, но пусто?
+                 return "AI не смог сформировать ответ на ваш запрос. Попробуйте спросить иначе."
+             elif finish_reason == types.FinishReason.MAX_TOKENS:
+                 return "Ответ AI получился слишком длинным и был обрезан. Попробуйте задать более конкретный вопрос."
+             elif finish_reason == types.FinishReason.SAFETY: # Явная блокировка по безопасности
+                 return "Мой ответ был заблокирован из-за правил безопасности контента. Пожалуйста, попробуйте переформулировать свой запрос."
+             else: # Recitation, Other, Unknown...
                  return "К сожалению, не удалось получить содержательный ответ от AI. Попробуйте позже."
 
     except Exception as e:
