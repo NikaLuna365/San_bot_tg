@@ -1,18 +1,15 @@
 # handlers/test.py
 import logging
-# import json # Больше не нужен здесь напрямую для записи
-# import os # Больше не нужен здесь для путей
 from datetime import datetime
-from typing import Dict, Any, List, Optional # Добавили Optional
+from typing import Dict, Any, List, Optional
 
-# import aiofiles # Больше не нужен
 from telegram import Update, ReplyKeyboardRemove
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters
 
 # --- Импорты проекта ---
 from constants import (
     State, WEEKDAY_FIXED_QUESTIONS, OPEN_QUESTIONS,
-    build_fixed_keyboard, CANCEL_KEYBOARD # DATA_DIR больше не нужен здесь
+    build_fixed_keyboard, CANCEL_KEYBOARD, MAIN_MENU_KEYBOARD
 )
 import gemini_client
 import db # Добавлен импорт db
@@ -26,14 +23,15 @@ async def test_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Stat
     """Начинает диалог прохождения теста."""
     user_id = update.effective_user.id
     logger.info(f"Пользователь {user_id} начал тест.")
-    context.user_data["test_answers"] = {}
-    # Убираем test_start_time_str, так как timestamp будет браться при сохранении
+    # Инициализация данных для нового теста
+    context.user_data["test_answers"] = {"fixed": {}, "open": {}}
     context.user_data["question_index"] = 0
+    context.user_data.pop("test_chat_history", None) # Очищаем историю предыдущего чата, если была
+    context.user_data.pop("test_chat_context", None)
 
-    # Определяем вопросы на сегодня
-    now = get_now_utc() # Получаем текущее время UTC
-    current_day: int = now.weekday() # 0 = Понедельник, 6 = Воскресенье
-    context.user_data["current_weekday"] = current_day # Сохраняем для записи в БД
+    now = get_now_utc()
+    current_day: int = now.weekday()
+    context.user_data["current_weekday"] = current_day
 
     fixed_questions: List[str] = WEEKDAY_FIXED_QUESTIONS.get(current_day, WEEKDAY_FIXED_QUESTIONS[0])
     context.user_data["fixed_questions"] = fixed_questions
@@ -52,6 +50,13 @@ async def test_fixed_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     fixed_questions: List[str] = context.user_data.get("fixed_questions", [])
 
     if user_input == "Главное меню":
+        # Очищаем данные теста при выходе
+        context.user_data.pop("test_answers", None)
+        context.user_data.pop("question_index", None)
+        context.user_data.pop("fixed_questions", None)
+        context.user_data.pop("current_weekday", None)
+        context.user_data.pop("test_chat_history", None)
+        context.user_data.pop("test_chat_context", None)
         return await exit_to_main(update, context)
 
     if user_input not in [str(i) for i in range(1, 8)]:
@@ -61,8 +66,6 @@ async def test_fixed_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return State(State.TEST_FIXED_1.value + q_index)
 
-    # Сохраняем ответ в user_data (как и раньше)
-    # Сохраняем как строку, чтобы потом корректно записать в JSON
     context.user_data.setdefault("test_answers", {}).setdefault("fixed", {})[f"fixed_{q_index+1}"] = user_input
     logger.debug(f"User {user_id} answered fixed Q{q_index+1}: {user_input}")
 
@@ -83,6 +86,13 @@ async def test_open_1(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Sta
     user_id = update.effective_user.id
 
     if user_input == "Главное меню":
+        # Очищаем данные теста при выходе
+        context.user_data.pop("test_answers", None)
+        context.user_data.pop("question_index", None)
+        context.user_data.pop("fixed_questions", None)
+        context.user_data.pop("current_weekday", None)
+        context.user_data.pop("test_chat_history", None)
+        context.user_data.pop("test_chat_context", None)
         return await exit_to_main(update, context)
 
     context.user_data.setdefault("test_answers", {}).setdefault("open", {})["open_1"] = user_input
@@ -99,10 +109,16 @@ async def test_open_2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Sta
     if not pool:
         logger.error(f"DB pool not found in context for user {user_id} in test_open_2")
         await update.message.reply_text("Произошла ошибка при доступе к базе данных. Результаты не сохранены.", reply_markup=MAIN_MENU_KEYBOARD)
-        # Важно завершить диалог, если нет БД
         return ConversationHandler.END
 
     if user_input == "Главное меню":
+        # Очищаем данные теста при выходе
+        context.user_data.pop("test_answers", None)
+        context.user_data.pop("question_index", None)
+        context.user_data.pop("fixed_questions", None)
+        context.user_data.pop("current_weekday", None)
+        context.user_data.pop("test_chat_history", None)
+        context.user_data.pop("test_chat_context", None)
         return await exit_to_main(update, context)
 
     context.user_data.setdefault("test_answers", {}).setdefault("open", {})["open_2"] = user_input
@@ -110,43 +126,31 @@ async def test_open_2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Sta
 
     # --- Подготовка данных для сохранения ---
     timestamp_utc = get_now_utc()
-    weekday = context.user_data.get("current_weekday", timestamp_utc.weekday()) # Берем сохраненный или текущий
+    weekday = context.user_data.get("current_weekday", timestamp_utc.weekday())
     all_answers = context.user_data.get("test_answers", {})
     fixed_answers = all_answers.get("fixed", {})
     open_answers = all_answers.get("open", {})
-    test_id: Optional[int] = None # Инициализируем ID теста
+    test_id: Optional[int] = None
 
     # --- Сохранение первичных данных в БД (без интерпретации) ---
     try:
         test_id = await db.save_test_result(
-            pool=pool,
-            user_id=user_id,
-            timestamp=timestamp_utc,
-            weekday=weekday,
-            fixed_answers=fixed_answers,
-            open_answers=open_answers,
-            interpretation=None # Пока нет интерпретации
+            pool=pool, user_id=user_id, timestamp=timestamp_utc, weekday=weekday,
+            fixed_answers=fixed_answers, open_answers=open_answers, interpretation=None
         )
         if test_id is None:
             logger.error(f"Не удалось сохранить первичные данные теста для user {user_id} в БД.")
-            # Не прерываем диалог, но сообщаем
             await update.message.reply_text(
                 "Произошла ошибка при сохранении данных теста. Пожалуйста, попробуйте позже.",
                 reply_markup=CANCEL_KEYBOARD # Даем шанс попробовать позже или выйти
             )
-            # Не будем продолжать с Gemini, если сохранение не удалось
-            # Можно вернуть какое-то состояние ошибки или главное меню
-            # Но лучше остаться здесь, чтобы пользователь мог нажать "Главное меню"
-            # Если же он напишет текст, то попадет в test_open_2 снова,
-            # что может привести к дублированию попыток сохранения.
-            # Поэтому лучше вернуть END, но с CANCEL_KEYBOARD
-            return ConversationHandler.END # Завершаем диалог
+            return ConversationHandler.END # Завершаем диалог, если сохранение критично
 
     except Exception as e:
         logger.exception(f"Непредвиденная ошибка при сохранении теста user {user_id} в БД:")
         await update.message.reply_text(
             "Произошла внутренняя ошибка при сохранении данных.",
-            reply_markup=MAIN_MENU_KEYBOARD # Возвращаем в главное меню
+            reply_markup=MAIN_MENU_KEYBOARD
         )
         return ConversationHandler.END
 
@@ -154,44 +158,42 @@ async def test_open_2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Sta
     await update.message.reply_text("Спасибо за ответы! Анализирую ваше состояние...", reply_markup=ReplyKeyboardRemove())
 
     fixed_questions = context.user_data.get("fixed_questions", [])
-    # Важно передать словарь с ответами { 'fixed_1': '5', ... 'open_1': 'text', ... }
     all_answers_flat = {**fixed_answers, **open_answers}
-
-    # Строим промпт на основе полных данных
     prompt = gemini_client.build_gemini_prompt_for_test(fixed_questions, all_answers_flat)
     interpretation = await gemini_client.call_gemini_api(prompt)
 
     # --- Обновление записи в БД с интерпретацией ---
-    if interpretation and "Ошибка:" not in interpretation and test_id is not None:
+    initial_ai_response = interpretation # Сохраняем первый ответ AI
+    if interpretation and "Ошибка:" not in interpretation and "Извините," not in interpretation and test_id is not None:
          try:
              await db.update_test_interpretation(pool, test_id, interpretation)
          except Exception as e:
-             # Ошибка обновления не критична для пользователя, просто логируем
              logger.exception(f"Ошибка при обновлении интерпретации теста {test_id} для user {user_id}:")
     elif test_id is None:
          logger.error(f"Не удалось обновить интерпретацию: test_id не был получен при сохранении для user {user_id}")
 
-
     # --- Формирование контекста для чата ---
-    chat_context = "Результаты теста учтены." # Запасной вариант
+    chat_context = "Результаты теста учтены."
     try:
-        # Пытаемся рассчитать средние (для контекста чата) из сохраненных ответов
         s_1_sum = int(fixed_answers.get("fixed_1", 0)) + int(fixed_answers.get("fixed_2", 0))
         s_2_sum = int(fixed_answers.get("fixed_3", 0)) + int(fixed_answers.get("fixed_4", 0))
         s_3_sum = int(fixed_answers.get("fixed_5", 0)) + int(fixed_answers.get("fixed_6", 0))
-        # Проверка деления на ноль (если вдруг ответов было меньше 2 на пару)
         s_1_count = (1 if "fixed_1" in fixed_answers else 0) + (1 if "fixed_2" in fixed_answers else 0)
         s_2_count = (1 if "fixed_3" in fixed_answers else 0) + (1 if "fixed_4" in fixed_answers else 0)
         s_3_count = (1 if "fixed_5" in fixed_answers else 0) + (1 if "fixed_6" in fixed_answers else 0)
-
         s_1_avg = f"{s_1_sum / s_1_count:.1f}/7" if s_1_count > 0 else "N/A"
         s_2_avg = f"{s_2_sum / s_2_count:.1f}/7" if s_2_count > 0 else "N/A"
         s_3_avg = f"{s_3_sum / s_3_count:.1f}/7" if s_3_count > 0 else "N/A"
-
         chat_context = f"Самочувствие: {s_1_avg}, Активность: {s_2_avg}, Настроение: {s_3_avg}."
     except (ValueError, TypeError, ZeroDivisionError) as e:
         logger.warning(f"Не удалось рассчитать средние баллы для контекста чата user {user_id}: {e}")
     context.user_data["test_chat_context"] = chat_context
+
+    # --- Инициализация истории чата первым ответом AI ---
+    if initial_ai_response and "Ошибка:" not in initial_ai_response and "Извините," not in initial_ai_response:
+        context.user_data["test_chat_history"] = [{"role": "model", "content": initial_ai_response}]
+    else:
+        context.user_data["test_chat_history"] = [] # Начинаем с пустой истории, если AI не ответил
 
     # --- Ответ пользователю ---
     message = (
@@ -210,13 +212,17 @@ async def test_open_2(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Sta
 
 
 async def gemini_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
-    """Обрабатывает сообщения пользователя в чате после теста."""
+    """Обрабатывает сообщения пользователя в чате после теста, сохраняет историю и обрабатывает запрос на резюме."""
     user_input = update.message.text.strip()
     user_id = update.effective_user.id
+    # Получаем или инициализируем историю чата для теста
+    chat_history: List[Dict[str, str]] = context.user_data.setdefault("test_chat_history", [])
 
     if user_input == "Главное меню":
-        # Очищаем контекст чата при выходе
+        # Очищаем контекст чата и историю при выходе
         context.user_data.pop("test_chat_context", None)
+        context.user_data.pop("test_chat_history", None)
+        # Очищаем и другие данные теста
         context.user_data.pop("test_answers", None)
         context.user_data.pop("question_index", None)
         context.user_data.pop("fixed_questions", None)
@@ -224,15 +230,63 @@ async def gemini_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         return await exit_to_main(update, context)
 
     logger.info(f"User {user_id} продолжает чат после теста: '{user_input[:50]}...'")
-    chat_context = context.user_data.get("test_chat_context", "Результаты теста учтены.")
-    prompt = gemini_client.build_followup_chat_prompt(user_input, chat_context)
 
-    await context.bot.send_chat_action(chat_id=user_id, action="typing")
-    answer = await gemini_client.call_gemini_api(prompt, max_tokens=400)
+    # Добавляем сообщение пользователя в историю
+    chat_history.append({"role": "user", "content": user_input})
 
-    await update.message.reply_text(
-        answer,
-        reply_markup=CANCEL_KEYBOARD
-    )
+    # --- Проверка на запрос резюме ---
+    is_summary_request = False
+    summary_keywords = ["итог", "резюме", "подведи", "обсуждали", "вывод"] # Добавили "вывод"
+    # Улучшаем проверку: ищем ключевые слова и смотрим на краткость сообщения
+    if any(keyword in user_input.lower() for keyword in summary_keywords) and len(user_input.split()) < 6:
+        is_summary_request = True
+        logger.info(f"User {user_id} запросил резюме чата теста.")
+
+    # --- Выбор и построение промпта ---
+    prompt = ""
+    answer = "" # Инициализируем переменную для ответа
+    if is_summary_request:
+        if len(chat_history) < 2: # Нечего резюмировать (только сообщение AI и запрос)
+             answer = "Мы еще почти ничего не обсудили, чтобы подводить итог."
+             prompt = None # Не будем вызывать API
+        else:
+            prompt = gemini_client.build_summary_prompt(chat_history)
+    else:
+        # Обычный ответ в чате
+        chat_context_summary = context.user_data.get("test_chat_context", "Результаты теста учтены.")
+        prompt = gemini_client.build_followup_chat_prompt(
+            chat_context=chat_context_summary,
+            chat_history=chat_history # Передаем историю
+        )
+
+    # --- Вызов API (если есть промпт) ---
+    if prompt:
+        await context.bot.send_chat_action(chat_id=user_id, action="typing")
+        api_answer = await gemini_client.call_gemini_api(prompt, max_tokens=400) # Уменьшаем лимит для чата
+        answer = api_answer # Используем ответ API
+
+        # Добавляем ответ AI в историю (только если это не резюме)
+        if not is_summary_request and api_answer and "Ошибка:" not in api_answer and "Извините," not in api_answer:
+             chat_history.append({"role": "model", "content": api_answer})
+             # Ограничиваем размер истории (например, последние 10 сообщений пользователя + 10 AI)
+             context.user_data["test_chat_history"] = chat_history[-20:]
+        elif is_summary_request:
+             # Удаляем запрос пользователя на резюме из истории, чтобы он не мешал следующему резюме
+             chat_history.pop()
+             context.user_data["test_chat_history"] = chat_history # Сохраняем историю без запроса на резюме
+    elif not answer: # Если промпт не создавался (например, нечего резюмировать)
+         pass # answer уже содержит сообщение "Мы еще почти ничего не обсудили..."
+
+    # --- Отправка ответа ---
+    if answer: # Отправляем только если есть что отправить
+        await update.message.reply_text(
+            answer,
+            reply_markup=CANCEL_KEYBOARD # Оставляем кнопку "Главное меню"
+        )
+    else:
+        logger.warning(f"Пустой ответ AI для user {user_id} в чате теста (после всех проверок).")
+        # Можно отправить сообщение по умолчанию
+        # await update.message.reply_text("Не могу сейчас ответить. Попробуйте позже.", reply_markup=CANCEL_KEYBOARD)
+
     # Остаемся в том же состоянии чата
     return State.GEMINI_CHAT_TEST
