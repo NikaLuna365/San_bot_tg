@@ -1,12 +1,13 @@
 # utils.py
-import logging # <--- ДОБАВЛЕН ЭТОТ ИМПОРТ
+import logging # <<< ИСПРАВЛЕНО: Добавлен импорт logging
 from datetime import datetime, timezone, date, time
 from calendar import monthrange
 from typing import Optional
 import re
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-logger = logging.getLogger(__name__) # Теперь logging известен
+# Инициализация логгера теперь будет работать
+logger = logging.getLogger(__name__)
 
 # Паттерн для GMT/UTC смещений
 TZ_OFFSET_PATTERN = re.compile(r"^(?:GMT|UTC)\s?([+-])(?:0?(\d{1,2}))(?::(00|30|45))?$", re.IGNORECASE)
